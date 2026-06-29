@@ -30,7 +30,25 @@ from datetime import datetime, timezone
 from analysis import generar_senal, detectar_volatilidad, seleccionar_estrategia_auto
 
 app = Flask(__name__)
-CORS(app, origins="*")
+CORS(app, origins="*", allow_headers=["Content-Type", "Accept", "Authorization", "X-API-Key"], methods=["GET", "POST", "OPTIONS"])
+
+@app.before_request
+def handle_options():
+    if request.method == "OPTIONS":
+        from flask import Response
+        res = Response()
+        res.headers["Access-Control-Allow-Origin"] = "*"
+        res.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        res.headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Authorization, X-API-Key"
+        return res
+
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Authorization, X-API-Key"
+    return response
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -118,6 +136,7 @@ def conectar():
 
     try:
         from iqoptionapi.stable_api import IQ_Option
+        import threading as _th
 
         with sesion["lock"]:
             if sesion["api"]:
@@ -127,8 +146,24 @@ def conectar():
                     pass
 
             api = IQ_Option(email, password)
-            ok, razon = api.connect()
 
+            # Conexión con timeout real de 15 segundos
+            resultado_conn = [None, None]
+            def _conectar():
+                try:
+                    resultado_conn[0], resultado_conn[1] = api.connect()
+                except Exception as ex:
+                    resultado_conn[0] = False
+                    resultado_conn[1] = str(ex)
+
+            t = _th.Thread(target=_conectar, daemon=True)
+            t.start()
+            t.join(timeout=15)
+
+            if t.is_alive():
+                return jsonify({"ok": False, "error": "IQ Option tardó demasiado en responder. Intenta de nuevo."}), 504
+
+            ok, razon = resultado_conn
             if not ok:
                 msg = str(razon)
                 if "2fa" in msg.lower() or "token" in msg.lower():
@@ -136,7 +171,7 @@ def conectar():
                 return jsonify({"ok": False, "error": "Email o contraseña incorrectos. Verifica tus credenciales en iqoption.com"}), 401
 
             api.change_balance(cuenta)
-            time.sleep(1)
+            time.sleep(0.5)  # mínimo necesario para que IQ actualice el balance
 
             saldo = api.get_balance()
             modo  = api.get_balance_mode()
