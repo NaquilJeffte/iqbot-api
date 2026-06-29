@@ -171,10 +171,17 @@ def conectar():
                 return jsonify({"ok": False, "error": "Email o contraseña incorrectos. Verifica tus credenciales en iqoption.com"}), 401
 
             api.change_balance(cuenta)
-            time.sleep(0.5)  # mínimo necesario para que IQ actualice el balance
+            time.sleep(2)  # esperar que IQ Option sincronice el saldo
 
-            saldo = api.get_balance()
-            modo  = api.get_balance_mode()
+            # Retry saldo hasta 3 veces
+            saldo = None
+            for _ in range(3):
+                saldo = api.get_balance()
+                if saldo and saldo > 0:
+                    break
+                time.sleep(1)
+
+            modo = api.get_balance_mode()
 
             # Obtener ambos saldos
             saldos = {}
@@ -350,21 +357,22 @@ def velas_live():
     api       = sesion["api"]
     activo    = request.args.get("activo",    "EURUSD")
     intervalo = int(request.args.get("intervalo", 60))
+    cantidad  = int(request.args.get("cantidad", 20))
 
     try:
-        api.start_candles_stream(activo, intervalo, 10)
-        time.sleep(2)
+        # Iniciar stream si no está activo
+        api.start_candles_stream(activo, intervalo, cantidad)
+        time.sleep(1.5)
 
+        # Intentar velas en tiempo real primero
         rt = api.get_realtime_candles(activo, intervalo)
-        if not rt:
-            raw = api.get_candles(activo, intervalo, 5, time.time())
-            velas_fmt = [raw_a_vela(c) for c in raw] if raw else []
-        else:
-            velas_fmt = []
-            for ts in sorted(rt.keys())[-5:]:
+        velas_fmt = []
+
+        if rt and len(rt) > 0:
+            for ts in sorted(rt.keys()):
                 c = rt[ts]
                 velas_fmt.append({
-                    "timestamp": ts,
+                    "timestamp": int(ts),
                     "datetime":  datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
                     "open":  c.get("open", 0),
                     "high":  c.get("max", 0),
@@ -372,14 +380,27 @@ def velas_live():
                     "close": c.get("close", 0),
                     "max":   c.get("max", 0),
                     "min":   c.get("min", 0),
+                    "volumen": c.get("volume", 0),
                 })
+        else:
+            # Fallback a históricas
+            raw = api.get_candles(activo, intervalo, cantidad, time.time())
+            velas_fmt = [raw_a_vela(c) for c in raw] if raw else []
+
+        precio_actual = velas_fmt[-1]["close"] if velas_fmt else None
+        precio_anterior = velas_fmt[-2]["close"] if len(velas_fmt) >= 2 else None
+        tendencia = "UP" if (precio_actual and precio_anterior and precio_actual > precio_anterior) else "DOWN"
 
         return jsonify({
-            "ok":        True,
-            "activo":    activo,
-            "intervalo": f"{intervalo}s",
-            "live":      True,
-            "velas":     velas_fmt,
+            "ok":             True,
+            "activo":         activo,
+            "intervalo":      f"{intervalo}s",
+            "live":           True,
+            "precio_actual":  precio_actual,
+            "tendencia":      tendencia,
+            "timestamp_srv":  int(time.time()),
+            "total_velas":    len(velas_fmt),
+            "velas":          velas_fmt,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
