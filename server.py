@@ -75,6 +75,36 @@ def requiere_conexion(f):
     return wrapper
 
 
+def normalizar_activo(activo):
+    """
+    Convierte cualquier formato que mande el frontend al formato EXACTO
+    que IQ Option usa internamente (sin slash, sin espacios, mayúsculas).
+
+    Ejemplos:
+      "EUR/USD"        -> "EURUSD"
+      "EUR/USD (OTC)"  -> "EURUSD-OTC"
+      "eur/usd-otc"    -> "EURUSD-OTC"
+      "BTC/USD (OTC)"  -> "BTCUSD-OTC"
+      "US 30 (OTC)"    -> "US30-OTC"   (índices con espacio)
+      "EURUSD"         -> "EURUSD"     (ya viene bien, no se toca)
+    """
+    if not activo:
+        return activo
+    a = activo.strip().upper()
+
+    es_otc = "OTC" in a
+    # quitar la palabra OTC y cualquier paréntesis/guión sobrante
+    a = a.replace("(OTC)", "").replace("OTC", "").strip()
+    # quitar slash y espacios (pares de divisas e índices)
+    a = a.replace("/", "").replace(" ", "")
+    # quitar guiones sueltos que pudieran quedar
+    a = a.strip("-")
+
+    if es_otc:
+        a = f"{a}-OTC"
+    return a
+
+
 def raw_a_vela(c):
     return {
         "timestamp": c["from"],
@@ -278,40 +308,49 @@ def desconectar():
 @app.route("/iq/activos")
 @requiere_conexion
 def activos():
+    """
+    tipo: "blitz" | "binary" | "digital"
+    - blitz   → instrumento "turbo" de IQ Option (operaciones cortas 30s-5min)
+    - binary  → instrumento "binary" de IQ Option (operaciones 1min-1d)
+    - digital → instrumento "digital" de IQ Option
+    Cada tipo tiene su PROPIO set de activos y NO deben mezclarse.
+    """
     api     = sesion["api"]
-    tipo    = request.args.get("tipo", "all")
+    tipo    = request.args.get("tipo", "blitz").lower()
     solo_ab = request.args.get("solo_abiertos", "1") == "1"
+
+    tipo_map = {
+        "blitz":   "turbo",
+        "binary":  "binary",
+        "digital": "digital",
+    }
+    tipo_iq = tipo_map.get(tipo)
+    if not tipo_iq:
+        return jsonify({"error": f"Tipo inválido: {tipo}. Usa blitz, binary o digital"}), 400
 
     try:
         open_time = api.get_all_open_time()
-        tipos_map = {
-            "binary":  ["turbo", "binary"],
-            "digital": ["digital"],
-            "all":     ["turbo", "binary", "digital"],
-        }
-        tipos_check = tipos_map.get(tipo, tipos_map["all"])
 
         resultado = {}
-        for t in tipos_check:
-            if t not in open_time:
-                continue
-            for activo, datos in open_time[t].items():
+        if tipo_iq in open_time:
+            for activo, datos in open_time[tipo_iq].items():
                 es_otc = "OTC" in activo.upper()
                 for exp, info in datos.items():
                     abierto = info.get("open", False)
                     if solo_ab and not abierto:
                         continue
                     if activo not in resultado:
-                        resultado[activo] = {"es_otc": es_otc, "tipos": {}}
-                    resultado[activo]["tipos"][f"{t}_{exp}"] = {
+                        resultado[activo] = {"es_otc": es_otc, "expiraciones": []}
+                    resultado[activo]["expiraciones"].append({
                         "abierto":    abierto,
-                        "tipo":       t,
                         "expiracion": exp,
-                    }
+                    })
 
         return jsonify({
-            "ok":     True,
-            "total":  len(resultado),
+            "ok":      True,
+            "tipo":    tipo,
+            "tipo_iq": tipo_iq,
+            "total":   len(resultado),
             "activos": resultado,
         })
     except Exception as e:
@@ -327,6 +366,7 @@ def activos():
 def velas():
     api       = sesion["api"]
     activo    = request.args.get("activo",    "EURUSD")
+    activo = normalizar_activo(activo)
     intervalo = int(request.args.get("intervalo", 60))
     cantidad  = int(request.args.get("cantidad",  100))
 
@@ -361,14 +401,28 @@ streams_lock = threading.Lock()
 def velas_live():
     api       = sesion["api"]
     activo    = request.args.get("activo",    "EURUSD")
+    activo = normalizar_activo(activo)
     intervalo = int(request.args.get("intervalo", 60))
     cantidad  = int(request.args.get("cantidad", 20))
     clave     = f"{activo}_{intervalo}"
 
     try:
-        # Iniciar el stream UNA SOLA VEZ por activo+intervalo (queda corriendo en background)
+        # Validar que el activo realmente exista y esté abierto en IQ Option
+        # antes de iniciar el stream — evita pedir velas de un activo equivocado
         with streams_lock:
             if clave not in streams_activos:
+                try:
+                    open_time = api.get_all_open_time()
+                    existe = False
+                    for tipo_iq in ["turbo", "binary", "digital"]:
+                        if tipo_iq in open_time and activo in open_time[tipo_iq]:
+                            existe = True
+                            break
+                    if not existe:
+                        return jsonify({"error": f"El activo {activo} no existe o no está disponible en IQ Option"}), 404
+                except Exception:
+                    pass  # si falla la validación, continuar de todas formas
+
                 api.start_candles_stream(activo, intervalo, cantidad)
                 streams_activos[clave] = True
                 time.sleep(1.2)  # solo la primera vez, para que el buffer tenga datos
@@ -426,6 +480,7 @@ def velas_stop():
     """Detiene un stream activo (llamar al cambiar de activo o salir de la pantalla)"""
     api       = sesion["api"]
     activo    = request.args.get("activo",    "EURUSD")
+    activo = normalizar_activo(activo)
     intervalo = int(request.args.get("intervalo", 60))
     clave     = f"{activo}_{intervalo}"
     try:
@@ -454,6 +509,7 @@ def senal():
     body = request.get_json(force=True)
 
     activo     = body.get("activo",    "EURUSD")
+    activo     = normalizar_activo(activo)
     intervalo  = int(body.get("intervalo",  60))
     duracion   = int(body.get("duracion",    1))
     cantidad   = int(body.get("cantidad_velas", 100))
@@ -531,6 +587,7 @@ def senal():
 def profit():
     api    = sesion["api"]
     activo = request.args.get("activo", "EURUSD")
+    activo = normalizar_activo(activo)
     try:
         todos = api.get_all_profit()
         info  = todos.get(activo, {})
@@ -600,6 +657,7 @@ def top_activos():
 def demo_senal():
     import random
     activo     = request.args.get("activo",    "EURUSD")
+    activo = normalizar_activo(activo)
     intervalo  = int(request.args.get("intervalo",  60))
     duracion   = int(request.args.get("duracion",    1))
     estrategia = request.args.get("estrategia", "auto")
