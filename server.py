@@ -351,6 +351,11 @@ def velas():
 #  VELAS EN TIEMPO REAL
 # ════════════════════════════════════════════════════════════════
 
+# Registro de streams activos: { "ACTIVO_INTERVALO": True }
+streams_activos = {}
+streams_lock = threading.Lock()
+
+
 @app.route("/iq/velas/live")
 @requiere_conexion
 def velas_live():
@@ -358,18 +363,22 @@ def velas_live():
     activo    = request.args.get("activo",    "EURUSD")
     intervalo = int(request.args.get("intervalo", 60))
     cantidad  = int(request.args.get("cantidad", 20))
+    clave     = f"{activo}_{intervalo}"
 
     try:
-        # Iniciar stream si no está activo
-        api.start_candles_stream(activo, intervalo, cantidad)
-        time.sleep(1.5)
+        # Iniciar el stream UNA SOLA VEZ por activo+intervalo (queda corriendo en background)
+        with streams_lock:
+            if clave not in streams_activos:
+                api.start_candles_stream(activo, intervalo, cantidad)
+                streams_activos[clave] = True
+                time.sleep(1.2)  # solo la primera vez, para que el buffer tenga datos
 
-        # Intentar velas en tiempo real primero
+        # Leer directamente del buffer en tiempo real, SIN reiniciar el stream
         rt = api.get_realtime_candles(activo, intervalo)
         velas_fmt = []
 
         if rt and len(rt) > 0:
-            for ts in sorted(rt.keys()):
+            for ts in sorted(rt.keys())[-cantidad:]:
                 c = rt[ts]
                 velas_fmt.append({
                     "timestamp": int(ts),
@@ -383,25 +392,48 @@ def velas_live():
                     "volumen": c.get("volume", 0),
                 })
         else:
-            # Fallback a históricas
+            # Fallback solo si el stream aún no tiene nada (raro tras el sleep inicial)
             raw = api.get_candles(activo, intervalo, cantidad, time.time())
             velas_fmt = [raw_a_vela(c) for c in raw] if raw else []
 
-        precio_actual = velas_fmt[-1]["close"] if velas_fmt else None
+        precio_actual   = velas_fmt[-1]["close"] if velas_fmt else None
         precio_anterior = velas_fmt[-2]["close"] if len(velas_fmt) >= 2 else None
         tendencia = "UP" if (precio_actual and precio_anterior and precio_actual > precio_anterior) else "DOWN"
 
+        # Segundos restantes para que cierre la vela actual (ritmo real del broker)
+        ahora = int(time.time())
+        seg_restantes = intervalo - (ahora % intervalo)
+
         return jsonify({
-            "ok":             True,
-            "activo":         activo,
-            "intervalo":      f"{intervalo}s",
-            "live":           True,
-            "precio_actual":  precio_actual,
-            "tendencia":      tendencia,
-            "timestamp_srv":  int(time.time()),
-            "total_velas":    len(velas_fmt),
-            "velas":          velas_fmt,
+            "ok":              True,
+            "activo":          activo,
+            "intervalo":       f"{intervalo}s",
+            "live":            True,
+            "precio_actual":   precio_actual,
+            "tendencia":       tendencia,
+            "timestamp_srv":   ahora,
+            "vela_cierra_en":  seg_restantes,
+            "total_velas":     len(velas_fmt),
+            "velas":           velas_fmt,
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/iq/velas/stop")
+@requiere_conexion
+def velas_stop():
+    """Detiene un stream activo (llamar al cambiar de activo o salir de la pantalla)"""
+    api       = sesion["api"]
+    activo    = request.args.get("activo",    "EURUSD")
+    intervalo = int(request.args.get("intervalo", 60))
+    clave     = f"{activo}_{intervalo}"
+    try:
+        with streams_lock:
+            if clave in streams_activos:
+                api.stop_candles_stream(activo, intervalo)
+                del streams_activos[clave]
+        return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
