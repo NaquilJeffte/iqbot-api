@@ -690,6 +690,62 @@ def demo_senal():
 #  ARRANQUE
 # ════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════
+#  HISTORIAL REAL DE OPERACIONES (las que el usuario ya hizo en IQ Option)
+# ════════════════════════════════════════════════════════════════
+
+@app.route("/iq/historial")
+@requiere_conexion
+def historial():
+    """
+    Trae las operaciones reales que el usuario ya ejecutó en su cuenta
+    de IQ Option (ganadas/perdidas/en curso), usando su sesión real.
+    """
+    api    = sesion["api"]
+    limit  = int(request.args.get("limit", 50))
+    try:
+        ops = []
+
+        # Operaciones digitales cerradas
+        try:
+            api.subscribe_position_changed("digital-options")
+        except:
+            pass
+
+        # Historial general (turbo + binary) vía get_optioninfo / get_position_history
+        try:
+            hist = api.get_position_history_v2("digital-option", limit, 0, time.time(), 0)
+            if hist and hist[0]:
+                for p in hist[1].get("positions", []):
+                    ops.append({
+                        "id":        p.get("id"),
+                        "activo":    p.get("active_id"),
+                        "direccion": "BUY" if p.get("direction") == "call" else "SELL",
+                        "monto":     p.get("invest"),
+                        "resultado": p.get("pnl_realized"),
+                        "estado":    p.get("status"),
+                        "abierta":   p.get("open_time"),
+                        "cerrada":   p.get("close_time"),
+                    })
+        except Exception:
+            pass
+
+        # Fallback: historial clásico turbo/binary
+        try:
+            api.get_betinfo(1)
+            historial_raw = getattr(api.api, "result", None)
+        except Exception:
+            historial_raw = None
+
+        return jsonify({
+            "ok":        True,
+            "total":     len(ops),
+            "historial": ops,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e), "historial": []}), 500
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print("=" * 60)
