@@ -309,24 +309,14 @@ def desconectar():
 @requiere_conexion
 def activos():
     """
-    tipo: "blitz" | "binary" | "digital"
-    - blitz   → instrumento "turbo" de IQ Option (operaciones cortas 30s-5min)
-    - binary  → instrumento "binary" de IQ Option (operaciones 1min-1d)
-    - digital → instrumento "digital" de IQ Option
-    Cada tipo tiene su PROPIO set de activos y NO deben mezclarse.
+    FORZADO A BLITZ ÚNICAMENTE.
+    Ignora el parámetro "tipo" que mande el frontend y siempre usa
+    el instrumento "turbo" (= Blitz) de IQ Option, para que el precio
+    coincida EXACTO con la pestaña Blitz de la plataforma real.
     """
     api     = sesion["api"]
-    tipo    = request.args.get("tipo", "blitz").lower()
     solo_ab = request.args.get("solo_abiertos", "1") == "1"
-
-    tipo_map = {
-        "blitz":   "turbo",
-        "binary":  "binary",
-        "digital": "digital",
-    }
-    tipo_iq = tipo_map.get(tipo)
-    if not tipo_iq:
-        return jsonify({"error": f"Tipo inválido: {tipo}. Usa blitz, binary o digital"}), 400
+    tipo_iq = "turbo"  # SIEMPRE Blitz, sin excepción
 
     try:
         open_time = api.get_all_open_time()
@@ -348,7 +338,7 @@ def activos():
 
         return jsonify({
             "ok":      True,
-            "tipo":    tipo,
+            "tipo":    "blitz",
             "tipo_iq": tipo_iq,
             "total":   len(resultado),
             "activos": resultado,
@@ -608,6 +598,7 @@ def profit():
 @app.route("/iq/top_activos")
 @requiere_conexion
 def top_activos():
+    """FORZADO A BLITZ (turbo) únicamente."""
     api   = sesion["api"]
     limit = int(request.args.get("limit", 10))
     try:
@@ -615,33 +606,30 @@ def top_activos():
         open_time = api.get_all_open_time()
 
         activos_abiertos = set()
-        for tipo in ["turbo", "binary", "digital"]:
-            if tipo in open_time:
-                for activo, datos in open_time[tipo].items():
-                    for exp, info in datos.items():
-                        if info.get("open"):
-                            activos_abiertos.add(activo)
+        if "turbo" in open_time:
+            for activo, datos in open_time["turbo"].items():
+                for exp, info in datos.items():
+                    if info.get("open"):
+                        activos_abiertos.add(activo)
 
         ranking = []
         for activo, info in profits.items():
             if activo not in activos_abiertos:
                 continue
-            turbo  = round((info.get("turbo",  0) or 0) * 100, 1)
-            binary = round((info.get("binary", 0) or 0) * 100, 1)
-            mejor  = max(turbo, binary)
-            if mejor > 0:
+            turbo = round((info.get("turbo", 0) or 0) * 100, 1)
+            if turbo > 0:
                 ranking.append({
-                    "activo":        activo,
-                    "es_otc":        "OTC" in activo.upper(),
-                    "profit_turbo":  turbo,
-                    "profit_binary": binary,
-                    "mejor_profit":  mejor,
+                    "activo":       activo,
+                    "es_otc":       "OTC" in activo.upper(),
+                    "profit_turbo": turbo,
+                    "mejor_profit": turbo,
                 })
 
         ranking.sort(key=lambda x: x["mejor_profit"], reverse=True)
 
         return jsonify({
             "ok":      True,
+            "tipo":    "blitz",
             "total":   len(ranking),
             "top":     ranking[:limit],
         })
