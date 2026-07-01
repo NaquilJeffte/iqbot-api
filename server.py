@@ -1,5 +1,5 @@
 """
-server.py — IQ Option Bot API v7.0
+server.py — IQ Option Bot API v7.0 
 - Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD de Railway
 - Sin login en el frontend
 - Velas en tiempo real (Blitz)
