@@ -58,6 +58,105 @@ sesion = {
 streams_activos = {}
 streams_lock    = threading.Lock()
 
+# ── Cache de activos (se pre-carga al arrancar) ──────────────────
+_cache_activos    = []
+_cache_activos_ts = 0
+
+def _precargar_activos():
+    global _cache_activos, _cache_activos_ts
+    time.sleep(20)  # esperar que IQ Option conecte primero
+    while True:
+        try:
+            if not sesion["conectado"] or sesion["api"] is None:
+                time.sleep(10)
+                continue
+            api = sesion["api"]
+            open_time_res = [None]
+            profits_res   = [None]
+            def _ot(): open_time_res[0] = api.get_all_open_time()
+            def _pr(): profits_res[0]   = api.get_all_profit()
+            t1 = threading.Thread(target=_ot, daemon=True)
+            t2 = threading.Thread(target=_pr, daemon=True)
+            t1.start(); t2.start()
+            t1.join(timeout=25); t2.join(timeout=25)
+            open_time = open_time_res[0] or {}
+            profits   = profits_res[0]   or {}
+            resultado = []
+            vistos = set()
+            if "turbo" in open_time:
+                for activo, datos in open_time["turbo"].items():
+                    if activo in vistos: continue
+                    abierto = any(info.get("open", False) for _, info in datos.items())
+                    if not abierto: continue
+                    vistos.add(activo)
+                    profit_info = profits.get(activo, {})
+                    payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
+                    resultado.append({
+                        "ticker":  activo,
+                        "nombre":  _nombre_legible(activo),
+                        "es_otc":  "OTC" in activo.upper(),
+                        "payout":  payout,
+                        "abierto": True,
+                    })
+            resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
+            _cache_activos    = resultado
+            _cache_activos_ts = time.time()
+            log.info(f"✅ Cache activos actualizado: {len(resultado)} activos")
+        except Exception as e:
+            log.error(f"Error precargando activos: {e}")
+        time.sleep(300)  # refrescar cada 5 minutos
+
+threading.Thread(target=_precargar_activos, daemon=True).start()
+
+# ── Cache de activos (evita llamar IQ Option cada vez) ──────────
+_cache_activos    = []
+_cache_activos_ts = 0
+
+def _precargar_activos():
+    """Precarga activos en background al arrancar — se refresca cada 5 min"""
+    global _cache_activos, _cache_activos_ts
+    time.sleep(15)  # esperar que IQ Option conecte primero
+    while True:
+        try:
+            if sesion["conectado"] and sesion["api"]:
+                api = sesion["api"]
+                open_time_res = [None]
+                profits_res   = [None]
+                def _ot(): open_time_res[0] = api.get_all_open_time()
+                def _pr(): profits_res[0]   = api.get_all_profit()
+                t1 = threading.Thread(target=_ot, daemon=True)
+                t2 = threading.Thread(target=_pr, daemon=True)
+                t1.start(); t2.start()
+                t1.join(timeout=25); t2.join(timeout=25)
+                open_time = open_time_res[0] or {}
+                profits   = profits_res[0]   or {}
+                resultado = []
+                vistos = set()
+                if "turbo" in open_time:
+                    for activo, datos in open_time["turbo"].items():
+                        if activo in vistos: continue
+                        abierto = any(info.get("open", False) for _, info in datos.items())
+                        if not abierto: continue
+                        vistos.add(activo)
+                        profit_info = profits.get(activo, {})
+                        payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
+                        resultado.append({
+                            "ticker":  activo,
+                            "nombre":  _nombre_legible(activo),
+                            "es_otc":  "OTC" in activo.upper(),
+                            "payout":  payout,
+                            "abierto": True,
+                        })
+                resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
+                _cache_activos    = resultado
+                _cache_activos_ts = time.time()
+                log.info(f"✅ Cache activos actualizado: {len(resultado)} activos")
+        except Exception as e:
+            log.error(f"Error precargando activos: {e}")
+        time.sleep(300)  # refrescar cada 5 minutos
+
+threading.Thread(target=_precargar_activos, daemon=True).start()
+
 
 # ════════════════════════════════════════════════════════════════
 #  AUTO-CONNECT AL ARRANCAR (usa env vars de Railway)
@@ -272,70 +371,51 @@ def desconectar():
 @requiere_conexion
 def activos_blitz():
     """
-    Devuelve TODOS los activos Blitz (turbo) abiertos en este momento,
-    incluyendo OTC y normales, con su payout real.
+    Devuelve activos Blitz desde cache (instantáneo).
+    El cache se llena en background al arrancar el servidor.
     """
-    api = sesion["api"]
+    global _cache_activos
+    # Si ya hay cache → respuesta instantánea
+    if _cache_activos:
+        return jsonify({
+            "ok":      True,
+            "tipo":    "blitz",
+            "total":   len(_cache_activos),
+            "activos": _cache_activos,
+            "cached":  True,
+        })
+    # Cache aún vacío → cargar en tiempo real (solo ocurre los primeros 15s)
     try:
-        # Obtener activos abiertos y profits en paralelo
-        open_time_res = [None]
-        profits_res   = [None]
-
-        def _ot():
-            open_time_res[0] = api.get_all_open_time()
-        def _pr():
-            profits_res[0]   = api.get_all_profit()
-
+        api = sesion["api"]
+        open_time_res = [None]; profits_res = [None]
+        def _ot(): open_time_res[0] = api.get_all_open_time()
+        def _pr(): profits_res[0]   = api.get_all_profit()
         t1 = threading.Thread(target=_ot, daemon=True)
         t2 = threading.Thread(target=_pr, daemon=True)
         t1.start(); t2.start()
-        t1.join(timeout=20); t2.join(timeout=20)
-
+        t1.join(timeout=25); t2.join(timeout=25)
         open_time = open_time_res[0] or {}
         profits   = profits_res[0]   or {}
-
         resultado = []
         vistos = set()
-        tipo_iq = "turbo"
-
-        if tipo_iq in open_time:
-            for activo, datos in open_time[tipo_iq].items():
-                if activo in vistos:
-                    continue
-
-                # Verificar que al menos una expiración esté abierta
-                abierto = any(
-                    info.get("open", False)
-                    for _, info in datos.items()
-                )
-                if not abierto:
-                    continue
-
+        if "turbo" in open_time:
+            for activo, datos in open_time["turbo"].items():
+                if activo in vistos: continue
+                abierto = any(info.get("open", False) for _, info in datos.items())
+                if not abierto: continue
                 vistos.add(activo)
-                es_otc = "OTC" in activo.upper()
-
                 profit_info = profits.get(activo, {})
-                payout_raw  = profit_info.get("turbo", 0) or 0
-                payout      = round(payout_raw * 100, 1)
-
+                payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
                 resultado.append({
                     "ticker":  activo,
                     "nombre":  _nombre_legible(activo),
-                    "es_otc":  es_otc,
+                    "es_otc":  "OTC" in activo.upper(),
                     "payout":  payout,
                     "abierto": True,
                 })
-
-        # Orden: mayor payout primero, luego OTC antes que normales
         resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
-
-        return jsonify({
-            "ok":     True,
-            "tipo":   "blitz",
-            "total":  len(resultado),
-            "activos": resultado,
-        })
-
+        _cache_activos = resultado
+        return jsonify({"ok": True, "tipo": "blitz", "total": len(resultado), "activos": resultado})
     except Exception as e:
         log.exception("Error en /iq/activos/blitz")
         return jsonify({"error": str(e)}), 500
