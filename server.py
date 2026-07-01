@@ -1,5 +1,4 @@
-"""
-server.py — IQ Option Bot API v7.0 
+server.py — IQ Option Bot API v7.0
 - Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD de Railway
 - Sin login en el frontend
 - Velas en tiempo real (Blitz)
@@ -68,65 +67,55 @@ _cache_activos    = []
 _cache_activos_ts = 0
 
 def _precargar_activos():
-    """Precarga activos en background al arrancar — se refresca cada 5 min"""
     global _cache_activos, _cache_activos_ts
-    time.sleep(15)  # esperar que IQ Option conecte primero
+    time.sleep(20)
     while True:
         try:
-            if sesion["conectado"] and sesion["api"]:
-                api = sesion["api"]
-                open_time_res = [None]
-                profits_res   = [None]
+            if not sesion["conectado"] or sesion["api"] is None:
+                time.sleep(10)
+                continue
+            api = sesion["api"]
 
-                def _ot():
-                    open_time_res[0] = api.get_all_open_time()
+            # Obtener solo turbo (Blitz) — ignorar digital que falla
+            profits_res = [None]
+            def _pr(): profits_res[0] = api.get_all_profit()
+            t2 = threading.Thread(target=_pr, daemon=True)
+            t2.start(); t2.join(timeout=20)
+            profits = profits_res[0] or {}
 
-                def _pr():
-                    profits_res[0] = api.get_all_profit()
+            # Obtener activos turbo directamente sin digital
+            init_info = api.get_all_init()
+            resultado = []
+            vistos = set()
 
-                t1 = threading.Thread(target=_ot, daemon=True)
-                t2 = threading.Thread(target=_pr, daemon=True)
-                t1.start()
-                t2.start()
-                t1.join(timeout=25)
-                t2.join(timeout=25)
+            if init_info and "result" in init_info:
+                turbo = init_info["result"].get("turbo", {}).get("actives", {})
+                for activo_id, datos in turbo.items():
+                    nombre = datos.get("name", "")
+                    if "." in nombre:
+                        nombre = nombre.split(".")[1]
+                    if nombre in vistos: continue
+                    if datos.get("is_suspended", False): continue
+                    if not datos.get("enabled", False): continue
+                    vistos.add(nombre)
+                    profit_info = profits.get(nombre, {})
+                    payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
+                    resultado.append({
+                        "ticker":  nombre,
+                        "nombre":  _nombre_legible(nombre),
+                        "es_otc":  "OTC" in nombre.upper(),
+                        "payout":  payout,
+                        "abierto": True,
+                    })
 
-                open_time = open_time_res[0] or {}
-                profits   = profits_res[0]   or {}
-
-                resultado = []
-                vistos = set()
-
-                if "turbo" in open_time:
-                    for activo, datos in open_time["turbo"].items():
-                        if activo in vistos:
-                            continue
-                        abierto = any(info.get("open", False) for _, info in datos.items())
-                        if not abierto:
-                            continue
-                        vistos.add(activo)
-
-                        profit_info = profits.get(activo, {})
-                        payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
-
-                        resultado.append({
-                            "ticker":  activo,
-                            "nombre":  _nombre_legible(activo),
-                            "es_otc":  "OTC" in activo.upper(),
-                            "payout":  payout,
-                            "abierto": True,
-                        })
-
-                resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
-                _cache_activos    = resultado
-                _cache_activos_ts = time.time()
-                log.info(f"✅ Cache activos actualizado: {len(resultado)} activos")
+            resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
+            _cache_activos = resultado
+            _cache_activos_ts = time.time()
+            log.info(f"✅ Cache activos: {len(resultado)} activos")
 
         except Exception as e:
             log.error(f"Error precargando activos: {e}")
-
-        time.sleep(300)  # refrescar cada 5 minutos
-
+        time.sleep(300)
 
 threading.Thread(target=_precargar_activos, daemon=True).start()
 
