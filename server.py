@@ -23,8 +23,12 @@ from datetime import datetime, timezone
 from analysis import generar_senal, detectar_volatilidad, seleccionar_estrategia_auto
 
 app = Flask(__name__)
-CORS(app, origins="*", allow_headers=["Content-Type","Accept","Authorization","X-API-Key"],
-     methods=["GET","POST","OPTIONS"])
+CORS(
+    app,
+    origins="*",
+    allow_headers=["Content-Type", "Accept", "Authorization", "X-API-Key"],
+    methods=["GET", "POST", "OPTIONS"],
+)
 
 @app.before_request
 def handle_options():
@@ -42,6 +46,7 @@ def add_cors(response):
     response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type,Accept,Authorization,X-API-Key"
     return response
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -63,56 +68,6 @@ _cache_activos    = []
 _cache_activos_ts = 0
 
 def _precargar_activos():
-    global _cache_activos, _cache_activos_ts
-    time.sleep(20)  # esperar que IQ Option conecte primero
-    while True:
-        try:
-            if not sesion["conectado"] or sesion["api"] is None:
-                time.sleep(10)
-                continue
-            api = sesion["api"]
-            open_time_res = [None]
-            profits_res   = [None]
-            def _ot(): open_time_res[0] = api.get_all_open_time()
-            def _pr(): profits_res[0]   = api.get_all_profit()
-            t1 = threading.Thread(target=_ot, daemon=True)
-            t2 = threading.Thread(target=_pr, daemon=True)
-            t1.start(); t2.start()
-            t1.join(timeout=25); t2.join(timeout=25)
-            open_time = open_time_res[0] or {}
-            profits   = profits_res[0]   or {}
-            resultado = []
-            vistos = set()
-            if "turbo" in open_time:
-                for activo, datos in open_time["turbo"].items():
-                    if activo in vistos: continue
-                    abierto = any(info.get("open", False) for _, info in datos.items())
-                    if not abierto: continue
-                    vistos.add(activo)
-                    profit_info = profits.get(activo, {})
-                    payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
-                    resultado.append({
-                        "ticker":  activo,
-                        "nombre":  _nombre_legible(activo),
-                        "es_otc":  "OTC" in activo.upper(),
-                        "payout":  payout,
-                        "abierto": True,
-                    })
-            resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
-            _cache_activos    = resultado
-            _cache_activos_ts = time.time()
-            log.info(f"✅ Cache activos actualizado: {len(resultado)} activos")
-        except Exception as e:
-            log.error(f"Error precargando activos: {e}")
-        time.sleep(300)  # refrescar cada 5 minutos
-
-threading.Thread(target=_precargar_activos, daemon=True).start()
-
-# ── Cache de activos (evita llamar IQ Option cada vez) ──────────
-_cache_activos    = []
-_cache_activos_ts = 0
-
-def _precargar_activos():
     """Precarga activos en background al arrancar — se refresca cada 5 min"""
     global _cache_activos, _cache_activos_ts
     time.sleep(15)  # esperar que IQ Option conecte primero
@@ -122,24 +77,38 @@ def _precargar_activos():
                 api = sesion["api"]
                 open_time_res = [None]
                 profits_res   = [None]
-                def _ot(): open_time_res[0] = api.get_all_open_time()
-                def _pr(): profits_res[0]   = api.get_all_profit()
+
+                def _ot():
+                    open_time_res[0] = api.get_all_open_time()
+
+                def _pr():
+                    profits_res[0] = api.get_all_profit()
+
                 t1 = threading.Thread(target=_ot, daemon=True)
                 t2 = threading.Thread(target=_pr, daemon=True)
-                t1.start(); t2.start()
-                t1.join(timeout=25); t2.join(timeout=25)
+                t1.start()
+                t2.start()
+                t1.join(timeout=25)
+                t2.join(timeout=25)
+
                 open_time = open_time_res[0] or {}
                 profits   = profits_res[0]   or {}
+
                 resultado = []
                 vistos = set()
+
                 if "turbo" in open_time:
                     for activo, datos in open_time["turbo"].items():
-                        if activo in vistos: continue
+                        if activo in vistos:
+                            continue
                         abierto = any(info.get("open", False) for _, info in datos.items())
-                        if not abierto: continue
+                        if not abierto:
+                            continue
                         vistos.add(activo)
+
                         profit_info = profits.get(activo, {})
                         payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
+
                         resultado.append({
                             "ticker":  activo,
                             "nombre":  _nombre_legible(activo),
@@ -147,16 +116,19 @@ def _precargar_activos():
                             "payout":  payout,
                             "abierto": True,
                         })
+
                 resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
                 _cache_activos    = resultado
                 _cache_activos_ts = time.time()
                 log.info(f"✅ Cache activos actualizado: {len(resultado)} activos")
+
         except Exception as e:
             log.error(f"Error precargando activos: {e}")
+
         time.sleep(300)  # refrescar cada 5 minutos
 
-threading.Thread(target=_precargar_activos, daemon=True).start()
 
+threading.Thread(target=_precargar_activos, daemon=True).start()
 
 # ════════════════════════════════════════════════════════════════
 #  AUTO-CONNECT AL ARRANCAR (usa env vars de Railway)
@@ -177,6 +149,7 @@ def _auto_connect():
         api = IQ_Option(email, password)
 
         resultado = [None, None]
+
         def _conn():
             try:
                 resultado[0], resultado[1] = api.connect()
@@ -209,7 +182,6 @@ def _auto_connect():
 
 threading.Thread(target=_auto_connect, daemon=True).start()
 
-
 # ════════════════════════════════════════════════════════════════
 #  HELPERS
 # ════════════════════════════════════════════════════════════════
@@ -232,8 +204,8 @@ def normalizar_activo(activo):
         return activo
     a = activo.strip().upper()
     es_otc = "OTC" in a
-    a = a.replace("(OTC)","").replace("OTC","").strip()
-    a = a.replace("/","").replace(" ","").strip("-")
+    a = a.replace("(OTC)", "").replace("OTC", "").strip()
+    a = a.replace("/", "").replace(" ", "").strip("-")
     if es_otc:
         a = f"{a}-OTC"
     return a
@@ -257,15 +229,16 @@ def _nombre_legible(ticker):
     es_otc = t.endswith("-OTC")
     if es_otc:
         t = t[:-4]
+
     # pares de 6 letras → agregar /
     if len(t) == 6 and t.isalpha():
         t = t[:3] + "/" + t[3:]
     elif len(t) == 7 and "/" not in t:
         t = t[:3] + "/" + t[3:]
+
     if es_otc:
         t += " (OTC)"
     return t
-
 
 # ════════════════════════════════════════════════════════════════
 #  ENDPOINTS PÚBLICOS
@@ -301,7 +274,6 @@ def ping():
         "timestamp": int(time.time()),
     })
 
-
 # ════════════════════════════════════════════════════════════════
 #  LOGIN MANUAL (opcional — si no usas env vars)
 # ════════════════════════════════════════════════════════════════
@@ -309,32 +281,38 @@ def ping():
 @app.route("/iq/conectar", methods=["POST"])
 def conectar():
     body     = request.get_json(force=True)
-    email    = body.get("email","").strip()
-    password = body.get("password","")
-    cuenta   = body.get("cuenta","PRACTICE").upper()
+    email    = body.get("email", "").strip()
+    password = body.get("password", "")
+    cuenta   = body.get("cuenta", "PRACTICE").upper()
 
     if not email or not password:
-        return jsonify({"ok":False,"error":"Se requieren email y password"}), 400
+        return jsonify({"ok": False, "error": "Se requieren email y password"}), 400
 
     try:
         from iqoptionapi.stable_api import IQ_Option
         with sesion["lock"]:
             if sesion["api"]:
-                try: sesion["api"].api.close()
-                except: pass
+                try:
+                    sesion["api"].api.close()
+                except:
+                    pass
 
             api = IQ_Option(email, password)
             res = [None, None]
+
             def _c():
-                try:    res[0], res[1] = api.connect()
-                except Exception as ex: res[0]=False; res[1]=str(ex)
+                try:
+                    res[0], res[1] = api.connect()
+                except Exception as ex:
+                    res[0] = False
+                    res[1] = str(ex)
 
             t = threading.Thread(target=_c, daemon=True)
             t.start()
             t.join(timeout=15)
 
             if t.is_alive() or not res[0]:
-                return jsonify({"ok":False,"error":f"Error de conexión: {res[1]}"}), 401
+                return jsonify({"ok": False, "error": f"Error de conexión: {res[1]}"}), 401
 
             api.change_balance(cuenta)
             time.sleep(2)
@@ -345,23 +323,29 @@ def conectar():
             sesion["conectado"] = True
             sesion["cuenta"]    = cuenta
 
-        return jsonify({"ok":True,"email":email,"cuenta":cuenta,"saldo":round(saldo,2) if saldo else None})
+        return jsonify({
+            "ok": True,
+            "email": email,
+            "cuenta": cuenta,
+            "saldo": round(saldo, 2) if saldo else None
+        })
 
     except Exception as e:
-        return jsonify({"ok":False,"error":str(e)}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/iq/desconectar")
 def desconectar():
     with sesion["lock"]:
         if sesion["api"]:
-            try: sesion["api"].api.close()
-            except: pass
+            try:
+                sesion["api"].api.close()
+            except:
+                pass
         sesion["api"] = None
         sesion["conectado"] = False
         sesion["email"] = None
-    return jsonify({"ok":True})
-
+    return jsonify({"ok": True})
 
 # ════════════════════════════════════════════════════════════════
 #  ACTIVOS BLITZ (OTC + NORMALES con payout)
@@ -375,6 +359,7 @@ def activos_blitz():
     El cache se llena en background al arrancar el servidor.
     """
     global _cache_activos
+
     # Si ya hay cache → respuesta instantánea
     if _cache_activos:
         return jsonify({
@@ -384,28 +369,44 @@ def activos_blitz():
             "activos": _cache_activos,
             "cached":  True,
         })
-    # Cache aún vacío → cargar en tiempo real (solo ocurre los primeros 15s)
+
+    # Cache aún vacío → cargar en tiempo real
     try:
         api = sesion["api"]
-        open_time_res = [None]; profits_res = [None]
-        def _ot(): open_time_res[0] = api.get_all_open_time()
-        def _pr(): profits_res[0]   = api.get_all_profit()
+        open_time_res = [None]
+        profits_res   = [None]
+
+        def _ot():
+            open_time_res[0] = api.get_all_open_time()
+
+        def _pr():
+            profits_res[0]   = api.get_all_profit()
+
         t1 = threading.Thread(target=_ot, daemon=True)
         t2 = threading.Thread(target=_pr, daemon=True)
-        t1.start(); t2.start()
-        t1.join(timeout=25); t2.join(timeout=25)
+        t1.start()
+        t2.start()
+        t1.join(timeout=25)
+        t2.join(timeout=25)
+
         open_time = open_time_res[0] or {}
         profits   = profits_res[0]   or {}
+
         resultado = []
         vistos = set()
+
         if "turbo" in open_time:
             for activo, datos in open_time["turbo"].items():
-                if activo in vistos: continue
+                if activo in vistos:
+                    continue
                 abierto = any(info.get("open", False) for _, info in datos.items())
-                if not abierto: continue
+                if not abierto:
+                    continue
                 vistos.add(activo)
+
                 profit_info = profits.get(activo, {})
                 payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
+
                 resultado.append({
                     "ticker":  activo,
                     "nombre":  _nombre_legible(activo),
@@ -413,13 +414,20 @@ def activos_blitz():
                     "payout":  payout,
                     "abierto": True,
                 })
+
         resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
         _cache_activos = resultado
-        return jsonify({"ok": True, "tipo": "blitz", "total": len(resultado), "activos": resultado})
+
+        return jsonify({
+            "ok": True,
+            "tipo": "blitz",
+            "total": len(resultado),
+            "activos": resultado
+        })
+
     except Exception as e:
         log.exception("Error en /iq/activos/blitz")
         return jsonify({"error": str(e)}), 500
-
 
 # ════════════════════════════════════════════════════════════════
 #  VELAS EN TIEMPO REAL
@@ -438,13 +446,13 @@ def velas_live():
       cantidad  → cuántas velas mostrar (default 60)
     """
     api       = sesion["api"]
-    activo    = normalizar_activo(request.args.get("activo",    "EURUSD-OTC"))
+    activo    = normalizar_activo(request.args.get("activo", "EURUSD-OTC"))
     intervalo = int(request.args.get("intervalo", 5))
-    cantidad  = int(request.args.get("cantidad",  60))
+    cantidad  = int(request.args.get("cantidad", 60))
     clave     = f"{activo}_{intervalo}"
 
     # Validar que el intervalo sea soportado por IQ Option
-    INTERVALOS_VALIDOS = [1,5,10,15,30,60,120,300,600,900,1800,3600]
+    INTERVALOS_VALIDOS = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
     if intervalo not in INTERVALOS_VALIDOS:
         intervalo = 5
 
@@ -464,9 +472,9 @@ def velas_live():
                 c = rt[ts]
                 velas_fmt.append({
                     "timestamp": int(ts),
-                    "open":  round(float(c.get("open",  0)), 6),
-                    "high":  round(float(c.get("max",   0)), 6),
-                    "low":   round(float(c.get("min",   0)), 6),
+                    "open":  round(float(c.get("open", 0)), 6),
+                    "high":  round(float(c.get("max", 0)), 6),
+                    "low":   round(float(c.get("min", 0)), 6),
                     "close": round(float(c.get("close", 0)), 6),
                 })
         else:
@@ -504,9 +512,10 @@ def velas_live():
 @requiere_conexion
 def velas_stop():
     api       = sesion["api"]
-    activo    = normalizar_activo(request.args.get("activo",    "EURUSD-OTC"))
+    activo    = normalizar_activo(request.args.get("activo", "EURUSD-OTC"))
     intervalo = int(request.args.get("intervalo", 5))
     clave     = f"{activo}_{intervalo}"
+
     try:
         with streams_lock:
             if clave in streams_activos:
@@ -515,7 +524,6 @@ def velas_stop():
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 # ════════════════════════════════════════════════════════════════
 #  SEÑAL BUY / SELL
@@ -536,9 +544,9 @@ def senal():
     api  = sesion["api"]
     body = request.get_json(force=True)
 
-    activo    = normalizar_activo(body.get("activo",    "EURUSD-OTC"))
-    intervalo = int(body.get("intervalo",  5))
-    duracion  = int(body.get("duracion",   1))
+    activo    = normalizar_activo(body.get("activo", "EURUSD-OTC"))
+    intervalo = int(body.get("intervalo", 5))
+    duracion  = int(body.get("duracion", 1))
     cantidad  = int(body.get("cantidad_velas", 150))
 
     try:
@@ -575,10 +583,10 @@ def senal():
             "proxima_vela_en": prox,
             "duracion_min":    duracion,
             "intervalo_vela":  intervalo,
-            "rentabilidad":    f"{round(profit_pct*100,1)}%" if profit_pct else "N/D",
-            "volatilidad":     resultado.get("volatilidad","media"),
-            "tendencia":       resultado.get("tendencia","LATERAL"),
-            "timing":          resultado.get("timing",{}),
+            "rentabilidad":    f"{round(profit_pct * 100, 1)}%" if profit_pct else "N/D",
+            "volatilidad":     resultado.get("volatilidad", "media"),
+            "tendencia":       resultado.get("tendencia", "LATERAL"),
+            "timing":          resultado.get("timing", {}),
             "confianza":       resultado.get("confianza", 0),
             "votos_buy":       resultado.get("votos_buy", 0),
             "votos_sell":      resultado.get("votos_sell", 0),
@@ -589,7 +597,6 @@ def senal():
     except Exception as e:
         log.exception("Error en /iq/senal")
         return jsonify({"error": str(e)}), 500
-
 
 # ════════════════════════════════════════════════════════════════
 #  ARRANQUE
