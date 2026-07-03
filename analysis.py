@@ -1,9 +1,8 @@
-""" 
-analysis.py v3.0 — Motor de señales con timing perfecto
-- Python decide todo automaticamente
-- Calcula el momento OPTIMO de entrada
-- Distancia minima de movimiento por timeframe
-- Solo señal cuando hay certeza real 90%+
+"""
+analysis.py v4.0 — Siempre da BUY o SELL, nunca ESPERAR
+- Analiza 10 indicadores en tiempo real
+- Siempre elige la dirección más fuerte
+- Confianza real basada en consenso de indicadores
 """
 
 import math
@@ -11,96 +10,7 @@ import time
 
 
 # ═══════════════════════════════════════════════════════════════
-#  TIMING — Cuándo entrar según el timeframe
-# ═══════════════════════════════════════════════════════════════
-
-DISTANCIA_MINIMA = {
-    3:    0.0008,  # 3 segundos  → 0.0008% movimiento minimo
-    5:    0.001,   # 5 segundos
-    10:   0.002,   # 10 segundos
-    15:   0.003,   # 15 segundos
-    30:   0.005,   # 30 segundos
-    60:   0.010,   # 1 minuto
-    120:  0.015,   # 2 minutos
-    300:  0.025,   # 5 minutos
-    900:  0.040,   # 15 minutos
-    3600: 0.080,   # 1 hora
-}
-
-def calcular_timing_entrada(intervalo_seg):
-    """
-    Calcula el momento exacto para entrar.
-    
-    Retorna:
-      - momento: "ENTRAR_AHORA" / "ESPERAR_PROXIMA" / "PRECAUCION"
-      - segundos_restantes: cuántos segundos quedan de la vela actual
-      - porcentaje_restante: % del tiempo que queda
-      - mensaje: explicación clara para el usuario
-    """
-    ahora = time.time()
-    segundos_en_vela   = ahora % intervalo_seg
-    segundos_restantes = intervalo_seg - segundos_en_vela
-    porcentaje_restante = (segundos_restantes / intervalo_seg) * 100
-
-    # Reglas de entrada según tiempo restante
-    if porcentaje_restante >= 60:
-        # Más del 60% de la vela por delante — momento ÓPTIMO
-        momento = "ENTRAR_AHORA"
-        if intervalo_seg <= 10:
-            mensaje = f"Entrar YA — quedan {round(segundos_restantes, 1)}s"
-        else:
-            mensaje = f"Momento óptimo — quedan {round(segundos_restantes)}s de {intervalo_seg}s"
-
-    elif porcentaje_restante >= 30:
-        # Entre 30-60% — entrar con precaución
-        momento = "PRECAUCION"
-        mensaje = f"Entrar con cuidado — quedan {round(segundos_restantes)}s ({round(porcentaje_restante)}%)"
-
-    else:
-        # Menos del 30% — demasiado tarde, esperar la siguiente
-        momento = "ESPERAR_PROXIMA"
-        mensaje = f"Muy tarde — esperar próxima vela en {round(segundos_restantes)}s"
-
-    return {
-        "momento":            momento,
-        "segundos_restantes": round(segundos_restantes, 1),
-        "porcentaje_restante": round(porcentaje_restante, 1),
-        "mensaje":            mensaje,
-        "puede_entrar":       momento in ("ENTRAR_AHORA", "PRECAUCION"),
-    }
-
-
-def calcular_movimiento_real(candles, intervalo_seg):
-    """
-    Calcula si el precio ya se movió lo suficiente para entrar.
-    Compara el movimiento actual con el mínimo requerido por timeframe.
-    """
-    if len(candles) < 2:
-        return False, 0.0
-
-    ultima   = candles[-1]
-    anterior = candles[-2]
-
-    precio_actual   = ultima["close"]
-    precio_anterior = anterior["close"]
-
-    if precio_anterior == 0:
-        return False, 0.0
-
-    movimiento_pct = abs(precio_actual - precio_anterior) / precio_anterior * 100
-
-    # Buscar la distancia mínima más cercana al intervalo
-    distancia_min = DISTANCIA_MINIMA.get(
-        intervalo_seg,
-        DISTANCIA_MINIMA.get(60, 0.010)
-    )
-
-    suficiente = movimiento_pct >= distancia_min
-    return suficiente, round(movimiento_pct, 5)
-
-
-# ═══════════════════════════════════════════════════════════════
-#  INDICADORES ULTRA RAPIDOS
+#  INDICADORES
 # ═══════════════════════════════════════════════════════════════
 
 def ema(prices, period):
@@ -113,346 +23,397 @@ def ema(prices, period):
     return val
 
 
-def rsi_rapido(prices, period=10):
-    n = min(period, len(prices) // 3)
-    if n < 3 or len(prices) < n + 1:
-        return None
+def rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return 50.0
     gains = losses = 0.0
-    for i in range(len(prices) - n, len(prices)):
+    for i in range(len(prices) - period, len(prices)):
         d = prices[i] - prices[i-1]
         if d > 0: gains += d
         else: losses -= d
-    if losses == 0:
-        return 100.0
-    rs = (gains / n) / (losses / n)
+    if losses == 0: return 100.0
+    rs = (gains / period) / (losses / period)
     return 100 - 100 / (1 + rs)
 
 
 def momentum(prices, period=5):
     if len(prices) < period + 1:
-        return None
+        return 0
     return prices[-1] - prices[-period-1]
 
 
-def atr(candles, period=7):
-    if len(candles) < period + 1:
-        return None
-    trs = []
-    for i in range(1, len(candles)):
-        h  = candles[i]["max"]
-        l  = candles[i]["min"]
-        pc = candles[i-1]["close"]
-        trs.append(max(h-l, abs(h-pc), abs(l-pc)))
-    return sum(trs[-period:]) / period
-
-
-def bollinger_rapido(prices, period=15):
+def bollinger(prices, period=20):
     if len(prices) < period:
         return None, None, None
     sub = prices[-period:]
     sma = sum(sub) / period
-    std = math.sqrt(sum((p-sma)**2 for p in sub) / period)
+    std = math.sqrt(sum((p - sma) ** 2 for p in sub) / period)
     return sma + 2*std, sma, sma - 2*std
 
 
-def tendencia_precio(closes, ventana=10):
+def atr(candles, period=14):
+    if len(candles) < period + 1:
+        return 0.001
+    trs = []
+    for i in range(1, len(candles)):
+        h  = candles[i].get("high", candles[i].get("max", 0))
+        l  = candles[i].get("low",  candles[i].get("min", 0))
+        pc = candles[i-1]["close"]
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    return sum(trs[-period:]) / period
+
+
+def stochastico(prices, period=14):
+    if len(prices) < period:
+        return 50.0
+    sub = prices[-period:]
+    mn, mx = min(sub), max(sub)
+    if mx == mn: return 50.0
+    return (prices[-1] - mn) / (mx - mn) * 100
+
+
+def macd(prices):
+    if len(prices) < 26:
+        return 0, 0
+    ema12 = ema(prices, 12)
+    ema26 = ema(prices, 26)
+    if not ema12 or not ema26:
+        return 0, 0
+    macd_line = ema12 - ema26
+    # Signal line (9 periodos del macd)
+    return macd_line, macd_line * 0.9  # simplificado
+
+
+def tendencia_lineal(closes, ventana=20):
     if len(closes) < ventana:
-        return "LATERAL", 0
+        return "UP", 0
     sub = closes[-ventana:]
     n = len(sub)
     x_mean = (n - 1) / 2
     y_mean = sum(sub) / n
     num = sum((i - x_mean) * (sub[i] - y_mean) for i in range(n))
-    den = sum((i - x_mean)**2 for i in range(n))
+    den = sum((i - x_mean) ** 2 for i in range(n))
     if den == 0:
         return "LATERAL", 0
     slope = num / den
-    slope_pct = abs(slope) / y_mean * 100 if y_mean else 0
-    if slope_pct < 0.001:
-        return "LATERAL", 0
-    return ("UP" if slope > 0 else "DOWN"), min(slope_pct * 100, 1.0)
+    return ("UP" if slope > 0 else "DOWN"), abs(slope)
 
 
-def detectar_patron_vela(candles):
+def patron_velas(candles):
+    """Detecta patrones de velas japonesas"""
     if len(candles) < 3:
         return "NEUTRAL", 0
-    c  = candles[-1]
-    c1 = candles[-2]
-    c2 = candles[-3]
-    cuerpo = abs(c["close"] - c["open"])
-    rango  = c["max"] - c["min"] or 0.00001
-    s_inf  = min(c["close"], c["open"]) - c["min"]
-    s_sup  = c["max"] - max(c["close"], c["open"])
 
+    def norm(c):
+        return {
+            "open":  c.get("open", 0),
+            "close": c.get("close", 0),
+            "high":  c.get("high", c.get("max", 0)),
+            "low":   c.get("low",  c.get("min", 0)),
+        }
+
+    c  = norm(candles[-1])
+    c1 = norm(candles[-2])
+    c2 = norm(candles[-3])
+
+    # Engulfing alcista
     if (c1["close"] < c1["open"] and c["close"] > c["open"] and
-            c["open"] < c1["close"] and c["close"] > c1["open"]):
+            c["open"] <= c1["close"] and c["close"] >= c1["open"]):
         return "BUY", 90
+
+    # Engulfing bajista
     if (c1["close"] > c1["open"] and c["close"] < c["open"] and
-            c["open"] > c1["close"] and c["close"] < c1["open"]):
+            c["open"] >= c1["close"] and c["close"] <= c1["open"]):
         return "SELL", 90
+
+    # Tres soldados blancos
     if (c["close"] > c["open"] and c1["close"] > c1["open"] and
             c2["close"] > c2["open"] and
             c["close"] > c1["close"] > c2["close"]):
         return "BUY", 85
+
+    # Tres cuervos negros
     if (c["close"] < c["open"] and c1["close"] < c1["open"] and
             c2["close"] < c2["open"] and
             c["close"] < c1["close"] < c2["close"]):
         return "SELL", 85
-    # Sin patron fuerte reconocido → NEUTRAL
-    return "NEUTRAL", 0
 
+    # Martillo (hammer) alcista
+    cuerpo = abs(c["close"] - c["open"])
+    sombra_inf = min(c["close"], c["open"]) - c["low"]
+    sombra_sup = c["high"] - max(c["close"], c["open"])
+    if cuerpo > 0 and sombra_inf >= 2 * cuerpo and sombra_sup < cuerpo:
+        return "BUY", 75
 
-def nivel_soporte_resistencia(candles, ventana=20):
-    if len(candles) < ventana:
-        return None, None
-    sub    = candles[-ventana:]
-    precio = candles[-1]["close"]
-    maximos = sorted([c["max"] for c in sub], reverse=True)[:3]
-    minimos = sorted([c["min"] for c in sub])[:3]
-    resistencia = sum(maximos) / len(maximos)
-    soporte     = sum(minimos) / len(minimos)
-    dist_res = (resistencia - precio) / precio * 100
-    dist_sop = (precio - soporte) / precio * 100
-    return dist_sop, dist_res
+    # Estrella fugaz bajista
+    if cuerpo > 0 and sombra_sup >= 2 * cuerpo and sombra_inf < cuerpo:
+        return "SELL", 75
 
+    # Doji — mercado indeciso → usar tendencia
+    if cuerpo < (c["high"] - c["low"]) * 0.1:
+        return "NEUTRAL", 0
 
-def calcular_volatilidad_real(candles, periodo=14):
-    atr_val = atr(candles, periodo)
-    if not atr_val:
-        return 0.0, "baja"
-    precio = candles[-1]["close"]
-    pct = (atr_val / precio) * 100 if precio else 0
-    if pct >= 0.35:
-        return round(pct, 4), "muy_alta"
-    elif pct >= 0.25:
-        return round(pct, 4), "alta"
-    elif pct >= 0.15:
-        return round(pct, 4), "media_alta"
-    elif pct >= 0.05:
-        return round(pct, 4), "media"
-    return round(pct, 4), "baja"
+    # Vela actual fuerte
+    if c["close"] > c["open"]:
+        return "BUY", 60
+    else:
+        return "SELL", 60
 
 
 # ═══════════════════════════════════════════════════════════════
-#  MOTOR PRINCIPAL v3.0
+#  MOTOR PRINCIPAL v4.0 — SIEMPRE DA BUY O SELL
 # ═══════════════════════════════════════════════════════════════
 
 def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     """
-    Motor de señales v3.0 con timing perfecto.
-    
-    Nuevo en v3:
-    - Verifica si hay suficiente movimiento para el timeframe
-    - Calcula el momento exacto de entrada
-    - No genera señal si es muy tarde en la vela
-    - Garantiza que los últimos 30-40% de la vela son de espera tranquila
+    Motor v4.0 — Siempre genera BUY o SELL.
+    Usa votación ponderada de 10 indicadores.
+    La dirección ganadora siempre se muestra.
     """
-    if len(candles) < 20:
-        return {"error": "Datos insuficientes", "direccion": "ESPERAR"}
-
-    closes   = [c["close"] for c in candles]
-    precio   = closes[-1]
-    es_corto = timeframe_seg <= 30
-
-    # ── TIMING ──────────────────────────────────────────────────
-    timing = calcular_timing_entrada(timeframe_seg)
-
-    # Si es muy tarde en la vela → esperar la siguiente
-    if timing["momento"] == "ESPERAR_PROXIMA":
+    if len(candles) < 10:
+        # Con pocos datos, usar la última vela
+        ultima = candles[-1] if candles else {}
         return {
-            "direccion":   "ESPERAR_PROXIMA_VELA",
-            "estrategia":  "automatica",
-            "timing":      timing,
-            "mensaje":     timing["mensaje"],
+            "direccion": "BUY" if ultima.get("close", 0) >= ultima.get("open", 0) else "SELL",
+            "confianza": 50,
+            "estrategia": "automatica",
             "volatilidad": "media",
-            "tendencia":   "LATERAL",
-            "razones":     [f"Muy tarde para entrar — {timing['mensaje']}"],
-            "indicadores": {"precio": round(precio, 5)},
-            "fibonacci":   {"niveles": {}, "zona_actual": None, "precio_zona": None},
-            "patrones_velas": [],
-            "score_buy":   0,
-            "score_sell":  0,
-            "confianza":   0,
+            "tendencia": "LATERAL",
+            "razones": ["Datos limitados"],
+            "votos_buy": 1, "votos_sell": 0,
+            "score_buy": 1, "score_sell": 0,
+            "indicadores": {}, "fibonacci": {},
+            "patrones_velas": [], "timing": {},
         }
 
-    # ── MOVIMIENTO MINIMO ────────────────────────────────────────
-    movimiento_suficiente, movimiento_pct = calcular_movimiento_real(candles, timeframe_seg)
+    closes = [c["close"] for c in candles]
+    precio = closes[-1]
 
-    # ── INDICADORES ──────────────────────────────────────────────
-    tendencia_corta, _ = tendencia_precio(closes, 5)
-    tendencia, _       = tendencia_precio(closes, 15)
-
-    ef5,  es10 = (ema(closes, 5),  ema(closes, 10))
-    ef10, es20 = (ema(closes, 10), ema(closes, 20))
-    ef20, es50 = (ema(closes, 20), ema(closes, 50)) if len(closes) >= 50 else (None, None)
-
-    rsi_val    = rsi_rapido(closes, 8 if es_corto else 12)
-    mom3       = momentum(closes, 3)
-    mom7       = momentum(closes, 7)
-    bb_up, bb_mid, bb_lo = bollinger_rapido(closes, 12 if es_corto else 18)
-    patron_dir, patron_fuerza = detectar_patron_vela(candles)
-    dist_sop, dist_res = nivel_soporte_resistencia(candles, 20)
-    vol_pct, vol_nivel = calcular_volatilidad_real(candles)
-
-    # ── VOTOS ────────────────────────────────────────────────────
+    # ── 10 INDICADORES ──────────────────────────────────────────
     votos_buy  = []
     votos_sell = []
 
-    # Tendencia corta
-    if tendencia_corta == "UP":   votos_buy.append(("tendencia_corta", 1))
-    elif tendencia_corta == "DOWN": votos_sell.append(("tendencia_corta", 1))
+    # 1. TENDENCIA CORTA (5 velas)
+    tend_corta, _ = tendencia_lineal(closes, min(5, len(closes)))
+    if tend_corta == "UP":
+        votos_buy.append(("tendencia_corta", 2))
+    else:
+        votos_sell.append(("tendencia_corta", 2))
 
-    # Tendencia larga
-    if tendencia == "UP":   votos_buy.append(("tendencia_larga", 2))
-    elif tendencia == "DOWN": votos_sell.append(("tendencia_larga", 2))
+    # 2. TENDENCIA LARGA (20 velas)
+    tend_larga, fuerza = tendencia_lineal(closes, min(20, len(closes)))
+    peso_tend = 3 if fuerza > 0.0001 else 1
+    if tend_larga == "UP":
+        votos_buy.append(("tendencia_larga", peso_tend))
+    else:
+        votos_sell.append(("tendencia_larga", peso_tend))
 
-    # EMA 5/10
-    if ef5 and es10:
-        if ef5 > es10: votos_buy.append(("ema_5_10", 1))
-        else: votos_sell.append(("ema_5_10", 1))
+    # 3. EMA 5 vs EMA 20
+    ema5  = ema(closes, min(5, len(closes)))
+    ema20 = ema(closes, min(20, len(closes)))
+    if ema5 and ema20:
+        if ema5 > ema20:
+            votos_buy.append(("ema_cruce", 2))
+        else:
+            votos_sell.append(("ema_cruce", 2))
 
-    # EMA 10/20
-    if ef10 and es20:
-        if ef10 > es20: votos_buy.append(("ema_10_20", 1))
-        else: votos_sell.append(("ema_10_20", 1))
+    # 4. EMA 10 vs EMA 50
+    ema10 = ema(closes, min(10, len(closes)))
+    ema50 = ema(closes, min(50, len(closes))) if len(closes) >= 50 else None
+    if ema10 and ema50:
+        if ema10 > ema50:
+            votos_buy.append(("ema_lenta", 3))
+        else:
+            votos_sell.append(("ema_lenta", 3))
 
-    # EMA 20/50
-    if ef20 and es50:
-        if ef20 > es50: votos_buy.append(("ema_20_50", 2))
-        else: votos_sell.append(("ema_20_50", 2))
+    # 5. RSI
+    rsi_val = rsi(closes, min(14, len(closes) // 2))
+    if rsi_val < 30:
+        votos_buy.append(("rsi_sobrevendido", 4))
+    elif rsi_val < 45:
+        votos_buy.append(("rsi_bajo", 2))
+    elif rsi_val > 70:
+        votos_sell.append(("rsi_sobrecomprado", 4))
+    elif rsi_val > 55:
+        votos_sell.append(("rsi_alto", 2))
+    else:
+        # RSI neutral → seguir tendencia
+        if tend_corta == "UP":
+            votos_buy.append(("rsi_neutral", 1))
+        else:
+            votos_sell.append(("rsi_neutral", 1))
 
-    # RSI
-    if rsi_val is not None:
-        if rsi_val < 25:   votos_buy.append(("rsi_extremo", 3))
-        elif rsi_val < 40: votos_buy.append(("rsi", 2))
-        elif rsi_val > 75: votos_sell.append(("rsi_extremo", 3))
-        elif rsi_val > 60: votos_sell.append(("rsi", 2))
+    # 6. MACD
+    macd_line, signal_line = macd(closes)
+    if macd_line > signal_line:
+        votos_buy.append(("macd", 2))
+    else:
+        votos_sell.append(("macd", 2))
 
-    # Momentum doble
-    if mom3 is not None and mom7 is not None:
-        if mom3 > 0 and mom7 > 0:   votos_buy.append(("momentum", 2))
-        elif mom3 < 0 and mom7 < 0: votos_sell.append(("momentum", 2))
+    # 7. MOMENTUM
+    mom = momentum(closes, min(5, len(closes) - 1))
+    mom_largo = momentum(closes, min(10, len(closes) - 1))
+    if mom > 0 and mom_largo > 0:
+        votos_buy.append(("momentum", 3))
+    elif mom < 0 and mom_largo < 0:
+        votos_sell.append(("momentum", 3))
+    elif mom > 0:
+        votos_buy.append(("momentum_corto", 1))
+    else:
+        votos_sell.append(("momentum_corto", 1))
 
-    # Bollinger
-    if bb_up and bb_lo and bb_mid:
-        if precio < bb_lo:   votos_buy.append(("bollinger_extremo", 3))
-        elif precio > bb_up: votos_sell.append(("bollinger_extremo", 3))
-        elif precio < bb_mid: votos_buy.append(("bollinger", 1))
-        else: votos_sell.append(("bollinger", 1))
+    # 8. BOLLINGER BANDS
+    bb_up, bb_mid, bb_lo = bollinger(closes, min(20, len(closes)))
+    if bb_up and bb_lo:
+        if precio <= bb_lo:
+            votos_buy.append(("bollinger_sobrevendido", 4))
+        elif precio >= bb_up:
+            votos_sell.append(("bollinger_sobrecomprado", 4))
+        elif precio < bb_mid:
+            votos_buy.append(("bollinger_bajo", 1))
+        else:
+            votos_sell.append(("bollinger_alto", 1))
 
-    # Patron de vela
-    if patron_dir == "BUY"  and patron_fuerza >= 85:
-        votos_buy.append(("patron_vela", 4))
-    elif patron_dir == "SELL" and patron_fuerza >= 85:
-        votos_sell.append(("patron_vela", 4))
+    # 9. ESTOCÁSTICO
+    stoch = stochastico(closes, min(14, len(closes)))
+    if stoch < 20:
+        votos_buy.append(("estocastico_bajo", 3))
+    elif stoch < 40:
+        votos_buy.append(("estocastico_neutro_bajo", 1))
+    elif stoch > 80:
+        votos_sell.append(("estocastico_alto", 3))
+    elif stoch > 60:
+        votos_sell.append(("estocastico_neutro_alto", 1))
 
-    # Soporte/Resistencia
-    if dist_sop is not None and dist_res is not None:
-        if dist_sop < 0.08: votos_buy.append(("soporte", 2))
-        if dist_res < 0.08: votos_sell.append(("resistencia", 2))
+    # 10. PATRÓN DE VELAS
+    patron_dir, patron_fuerza = patron_velas(candles)
+    if patron_dir == "BUY":
+        peso_patron = 5 if patron_fuerza >= 85 else 3 if patron_fuerza >= 75 else 2
+        votos_buy.append(("patron_vela", peso_patron))
+    elif patron_dir == "SELL":
+        peso_patron = 5 if patron_fuerza >= 85 else 3 if patron_fuerza >= 75 else 2
+        votos_sell.append(("patron_vela", peso_patron))
 
-    # Movimiento suficiente — bonus si ya se movió lo necesario
-    if movimiento_suficiente:
-        if tendencia_corta == "UP":   votos_buy.append(("movimiento_confirmado", 2))
-        elif tendencia_corta == "DOWN": votos_sell.append(("movimiento_confirmado", 2))
-
-    # ── DECISION ─────────────────────────────────────────────────
+    # ── DECISIÓN ─────────────────────────────────────────────────
     peso_buy  = sum(v[1] for v in votos_buy)
     peso_sell = sum(v[1] for v in votos_sell)
-    total_v   = len(votos_buy) + len(votos_sell)
+    total     = peso_buy + peso_sell or 1
 
-    min_votos = 5 if es_corto else 4
-    min_peso  = 9 if es_corto else 7
-
-    puede_buy  = len(votos_buy)  >= min_votos and peso_buy  >= min_peso
-    puede_sell = len(votos_sell) >= min_votos and peso_sell >= min_peso
-    conflicto  = abs(peso_buy - peso_sell) < 3
-
-    if conflicto or (not puede_buy and not puede_sell):
-        direccion = "ESPERAR"
-    elif puede_buy and peso_buy > peso_sell:
+    # SIEMPRE elegir la dirección con más peso
+    if peso_buy >= peso_sell:
         direccion = "BUY"
-    elif puede_sell and peso_sell > peso_buy:
-        direccion = "SELL"
+        confianza = round((peso_buy / total) * 100)
     else:
-        direccion = "ESPERAR"
+        direccion = "SELL"
+        confianza = round((peso_sell / total) * 100)
 
-    # Certeza interna
-    certeza = 0
-    if total_v > 0 and direccion in ("BUY", "SELL"):
-        vg = len(votos_buy) if direccion == "BUY" else len(votos_sell)
-        certeza = round((vg / total_v) * 100)
+    # Confianza mínima 50% (siempre hay señal)
+    confianza = max(50, confianza)
 
-    if certeza < 75 and direccion not in ("ESPERAR",):
-        direccion = "ESPERAR"
+    # Timing
+    ahora = time.time()
+    seg_restantes = timeframe_seg - (ahora % timeframe_seg)
+    timing = {
+        "segundos_restantes": round(seg_restantes, 1),
+        "puede_entrar": True,
+        "mensaje": f"Entrar en próxima vela — {round(seg_restantes)}s",
+    }
 
-    # Razones legibles
+    # Razones top 5
     votos_ganadores = votos_buy if direccion == "BUY" else votos_sell
-    razones = [v[0].replace("_", " ").title() for v, _ in
-               [(v, v[1]) for v in votos_ganadores[:5]]]
+    razones = [v[0].replace("_", " ").title() for v in votos_ganadores[:5]]
+
+    # Volatilidad
+    atr_val = atr(candles)
+    vol_pct = (atr_val / precio * 100) if precio else 0
+    if vol_pct >= 0.35:   vol_nivel = "muy_alta"
+    elif vol_pct >= 0.25: vol_nivel = "alta"
+    elif vol_pct >= 0.15: vol_nivel = "media_alta"
+    elif vol_pct >= 0.05: vol_nivel = "media"
+    else:                  vol_nivel = "baja"
 
     return {
-        "direccion":   direccion,
-        "estrategia":  "automatica",
-        "volatilidad": vol_nivel,
-        "tendencia":   tendencia,
-        "timing":      timing,
-        "movimiento":  {
-            "suficiente":     movimiento_suficiente,
-            "porcentaje":     movimiento_pct,
-            "minimo_requerido": DISTANCIA_MINIMA.get(timeframe_seg, 0.01),
-        },
-        "razones":     razones,
-        "votos_buy":   len(votos_buy),
-        "votos_sell":  len(votos_sell),
-        "certeza_interna": certeza,
-        "confianza":   certeza,
-        "score_buy":   peso_buy,
-        "score_sell":  peso_sell,
+        "direccion":        direccion,
+        "estrategia":       "automatica",
+        "volatilidad":      vol_nivel,
+        "tendencia":        tend_larga,
+        "timing":           timing,
+        "razones":          razones,
+        "votos_buy":        len(votos_buy),
+        "votos_sell":       len(votos_sell),
+        "certeza_interna":  confianza,
+        "confianza":        confianza,
+        "score_buy":        peso_buy,
+        "score_sell":       peso_sell,
         "indicadores": {
-            "precio":      round(precio, 5),
-            "rsi":         round(rsi_val, 1) if rsi_val else None,
-            "momentum":    round(mom3, 6) if mom3 else None,
-            "ema_rapida":  round(ef5, 5) if ef5 else None,
-            "ema_lenta":   round(es10, 5) if es10 else None,
-            "bb_superior": round(bb_up, 5) if bb_up else None,
-            "bb_inferior": round(bb_lo, 5) if bb_lo else None,
-            "patron_vela": patron_dir,
-            "volatilidad_pct": vol_pct,
+            "precio":          round(precio, 6),
+            "rsi":             round(rsi_val, 1),
+            "momentum":        round(mom, 6),
+            "estocastico":     round(stoch, 1),
+            "macd":            round(macd_line, 6),
+            "ema_rapida":      round(ema5, 6) if ema5 else None,
+            "ema_lenta":       round(ema20, 6) if ema20 else None,
+            "bb_superior":     round(bb_up, 6) if bb_up else None,
+            "bb_inferior":     round(bb_lo, 6) if bb_lo else None,
+            "patron_vela":     patron_dir,
+            "volatilidad_pct": round(vol_pct, 4),
         },
         "fibonacci":      {"niveles": {}, "zona_actual": None, "precio_zona": None},
         "patrones_velas": [{"patron": patron_dir, "fuerza": patron_fuerza}] if patron_fuerza > 0 else [],
+        "movimiento":     {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
     }
 
 
 # ═══════════════════════════════════════════════════════════════
-#  ESCANEO AUTOMATICO
+#  COMPATIBILIDAD
 # ═══════════════════════════════════════════════════════════════
+
+def detectar_volatilidad(candles, periodo=14):
+    if not candles:
+        return "media"
+    atr_val = atr(candles, periodo)
+    precio  = candles[-1].get("close", 1)
+    pct     = (atr_val / precio * 100) if precio else 0
+    if pct >= 0.35:   return "muy_alta"
+    elif pct >= 0.25: return "alta"
+    elif pct >= 0.15: return "media_alta"
+    elif pct >= 0.05: return "media"
+    return "baja"
+
+def seleccionar_estrategia_auto(candles):
+    return "automatica", detectar_volatilidad(candles)
+
+def calcular_volatilidad_real(candles, periodo=14):
+    if not candles:
+        return 0.0, "media"
+    atr_val = atr(candles, periodo)
+    precio  = candles[-1].get("close", 1)
+    pct     = round((atr_val / precio * 100) if precio else 0, 4)
+    return pct, detectar_volatilidad(candles)
+
+def calcular_volatilidad_real_simple(candles, periodo=14):
+    pct, _ = calcular_volatilidad_real(candles, periodo)
+    return pct
 
 def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
     resultados = []
     for activo, candles in candles_por_activo.items():
-        if not candles or len(candles) < 20:
+        if not candles or len(candles) < 5:
             continue
         try:
             r = generar_senal(candles, "auto", timeframe_seg)
-            if r.get("direccion") in ("BUY", "SELL"):
-                resultados.append({
-                    "activo":    activo,
-                    "direccion": r["direccion"],
-                    "certeza":   r.get("certeza_interna", 0),
-                    "volatilidad": r.get("volatilidad", "media"),
-                    "timing":    r.get("timing", {}),
-                    "analisis":  r,
-                })
+            resultados.append({
+                "activo":      activo,
+                "direccion":   r["direccion"],
+                "certeza":     r.get("confianza", 50),
+                "volatilidad": r.get("volatilidad", "media"),
+                "analisis":    r,
+            })
         except Exception:
             continue
-
     resultados.sort(key=lambda x: x["certeza"], reverse=True)
-
     if not resultados:
-        return {"ok": False, "mensaje": "Sin señales claras ahora", "activos": []}
-
+        return {"ok": False, "mensaje": "Sin datos", "activos": []}
     mejor = resultados[0]
     return {
         "ok":      True,
@@ -460,18 +421,3 @@ def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
         "mejor":   mejor,
         "activos": resultados[:5],
     }
-
-
-def calcular_volatilidad_real_simple(candles, periodo=14):
-    """Alias para compatibilidad con top_activos"""
-    vol_pct, _ = calcular_volatilidad_real(candles, periodo)
-    return vol_pct
-
-
-# Aliases compatibilidad
-def detectar_volatilidad(candles, periodo=14):
-    _, nivel = calcular_volatilidad_real(candles, periodo)
-    return nivel
-
-def seleccionar_estrategia_auto(candles):
-    return "automatica", detectar_volatilidad(candles)
