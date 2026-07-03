@@ -323,11 +323,11 @@ def activos_blitz():
 def velas_live():
     api       = sesion["api"]
     activo    = normalizar_activo(request.args.get("activo","EURUSD-OTC"))
-    intervalo = int(request.args.get("intervalo",5))
+    intervalo = int(request.args.get("intervalo",60))  # Cambiado de 5 a 60
     cantidad  = int(request.args.get("cantidad",60))
     clave     = f"{activo}_{intervalo}"
     if intervalo not in [1,5,10,15,30,60,120,300,600,900,1800,3600]:
-        intervalo = 5
+        intervalo = 60  # Cambiado de 5 a 60
     try:
         with streams_lock:
             if clave not in streams_activos:
@@ -369,7 +369,7 @@ def velas_live():
 def velas_stop():
     api=sesion["api"]
     activo=normalizar_activo(request.args.get("activo","EURUSD-OTC"))
-    intervalo=int(request.args.get("intervalo",5))
+    intervalo=int(request.args.get("intervalo",60))  # Cambiado de 5 a 60
     clave=f"{activo}_{intervalo}"
     try:
         with streams_lock:
@@ -400,13 +400,13 @@ def senal():
     # Intervalo óptimo de vela según duración de operación
     duracion_seg = duracion_min * 60
     if duracion_seg <= 30:
-        intervalo = 5
+        intervalo = 60  # Cambiado de 5 a 60
     elif duracion_seg <= 60:
-        intervalo = 10
+        intervalo = 60  # Cambiado de 10 a 60
     elif duracion_seg <= 120:
-        intervalo = 15
+        intervalo = 60  # Cambiado de 15 a 60
     elif duracion_seg <= 300:
-        intervalo = 30
+        intervalo = 60  # Cambiado de 30 a 60
     else:
         intervalo = 60
 
