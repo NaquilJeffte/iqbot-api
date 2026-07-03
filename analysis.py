@@ -2,6 +2,7 @@
 analysis.py v4.2 — Equilibrio entre cantidad y calidad
 - Genera más señales que v4.1
 - Mantiene filtros de calidad moderados
+- Optimizado para velas de 1 minuto y duración 1 minuto
 """
 
 import math
@@ -28,10 +29,14 @@ def rsi(prices, period=14):
     gains = losses = 0.0
     for i in range(len(prices) - period, len(prices)):
         d = prices[i] - prices[i-1]
-        if d > 0: gains += d
-        else: losses -= d
-    if losses == 0: return 100.0
-    if gains == 0: return 0.0
+        if d > 0:
+            gains += d
+        else:
+            losses -= d
+    if losses == 0:
+        return 100.0
+    if gains == 0:
+        return 0.0
     rs = (gains / period) / (losses / period)
     return 100 - 100 / (1 + rs)
 
@@ -68,7 +73,8 @@ def stochastico(prices, period=14):
         return 50.0
     sub = prices[-period:]
     mn, mx = min(sub), max(sub)
-    if mx == mn: return 50.0
+    if mx == mn:
+        return 50.0
     return (prices[-1] - mn) / (mx - mn) * 100
 
 
@@ -177,10 +183,14 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
             "volatilidad": "media",
             "tendencia": "LATERAL",
             "razones": ["Datos insuficientes"],
-            "votos_buy": 0, "votos_sell": 0,
-            "score_buy": 0, "score_sell": 0,
-            "indicadores": {}, "fibonacci": {},
-            "patrones_velas": [], "timing": {},
+            "votos_buy": 0,
+            "votos_sell": 0,
+            "score_buy": 0,
+            "score_sell": 0,
+            "indicadores": {},
+            "fibonacci": {},
+            "patrones_velas": [],
+            "timing": {},
         }
 
     closes = [c["close"] for c in candles]
@@ -323,11 +333,16 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     # ── VOLATILIDAD ─────────────────────────────────────────────
     atr_val = atr(candles)
     vol_pct = (atr_val / precio * 100) if precio else 0
-    if vol_pct >= 0.35: vol_nivel = "muy_alta"
-    elif vol_pct >= 0.25: vol_nivel = "alta"
-    elif vol_pct >= 0.15: vol_nivel = "media_alta"
-    elif vol_pct >= 0.05: vol_nivel = "media"
-    else: vol_nivel = "baja"
+    if vol_pct >= 0.35:
+        vol_nivel = "muy_alta"
+    elif vol_pct >= 0.25:
+        vol_nivel = "alta"
+    elif vol_pct >= 0.15:
+        vol_nivel = "media_alta"
+    elif vol_pct >= 0.05:
+        vol_nivel = "media"
+    else:
+        vol_nivel = "baja"
 
     return {
         "direccion": direccion,
@@ -371,10 +386,14 @@ def detectar_volatilidad(candles, periodo=14):
     atr_val = atr(candles, periodo)
     precio = candles[-1].get("close", 1)
     pct = (atr_val / precio * 100) if precio else 0
-    if pct >= 0.35: return "muy_alta"
-    elif pct >= 0.25: return "alta"
-    elif pct >= 0.15: return "media_alta"
-    elif pct >= 0.05: return "media"
+    if pct >= 0.35:
+        return "muy_alta"
+    elif pct >= 0.25:
+        return "alta"
+    elif pct >= 0.15:
+        return "media_alta"
+    elif pct >= 0.05:
+        return "media"
     return "baja"
 
 
