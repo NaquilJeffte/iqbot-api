@@ -161,44 +161,36 @@ def _auto_connect():
 
 def _precargar_activos():
     global _cache_activos, _cache_activos_ts
-    time.sleep(20)  # esperar que IQ Option conecte primero
+    time.sleep(20)
     while True:
         try:
             if not sesion["conectado"] or sesion["api"] is None:
                 time.sleep(10)
                 continue
             api = sesion["api"]
-            open_time_res = [None]
-            profits_res   = [None]
 
-            def _ot(): open_time_res[0] = api.get_all_open_time()
-            def _pr(): profits_res[0]   = api.get_all_profit()
+            # Usar solo get_all_profit — más rápido que get_all_init
+            profits = {}
+            try:
+                profits = api.get_all_profit() or {}
+            except:
+                pass
 
-            t1 = threading.Thread(target=_ot, daemon=True)
-            t2 = threading.Thread(target=_pr, daemon=True)
-            t1.start(); t2.start()
-            t1.join(timeout=25); t2.join(timeout=25)
-
-            open_time = open_time_res[0] or {}
-            profits   = profits_res[0]   or {}
             resultado = []
-            vistos = set()
-
-            if "turbo" in open_time:
-                for activo, datos in open_time["turbo"].items():
-                    if activo in vistos: continue
-                    abierto = any(info.get("open", False) for _, info in datos.items())
-                    if not abierto: continue
-                    vistos.add(activo)
-                    profit_info = profits.get(activo, {})
-                    payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
-                    resultado.append({
-                        "ticker":  activo,
-                        "nombre":  _nombre_legible(activo),
-                        "es_otc":  "OTC" in activo.upper(),
-                        "payout":  payout,
-                        "abierto": True,
-                    })
+            # Construir lista desde profits directamente
+            for activo, info in profits.items():
+                if not info:
+                    continue
+                payout = round((info.get("turbo", 0) or 0) * 100, 1)
+                if payout <= 0:
+                    continue
+                resultado.append({
+                    "ticker":  activo,
+                    "nombre":  _nombre_legible(activo),
+                    "es_otc":  "OTC" in activo.upper(),
+                    "payout":  payout,
+                    "abierto": True,
+                })
 
             resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
             _cache_activos    = resultado
@@ -207,8 +199,7 @@ def _precargar_activos():
 
         except Exception as e:
             log.error(f"Error precargando activos: {e}")
-
-        time.sleep(300)  # refrescar cada 5 minutos
+        time.sleep(300)
 
 # Arrancar hilos
 threading.Thread(target=_auto_connect,     daemon=True).start()
