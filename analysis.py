@@ -1,8 +1,8 @@
 """
-analysis.py v4.0 — Siempre da BUY o SELL, nunca ESPERAR
-- Analiza 10 indicadores en tiempo real
-- Siempre elige la dirección más fuerte
-- Confianza real basada en consenso de indicadores
+analysis.py v4.1 — Señales más confiables
+- Análisis profundo con 10 indicadores
+- Filtros de confianza elevados
+- Solo señales con alta probabilidad de éxito
 """
 
 import math
@@ -32,6 +32,7 @@ def rsi(prices, period=14):
         if d > 0: gains += d
         else: losses -= d
     if losses == 0: return 100.0
+    if gains == 0: return 0.0
     rs = (gains / period) / (losses / period)
     return 100 - 100 / (1 + rs)
 
@@ -56,8 +57,8 @@ def atr(candles, period=14):
         return 0.001
     trs = []
     for i in range(1, len(candles)):
-        h  = candles[i].get("high", candles[i].get("max", 0))
-        l  = candles[i].get("low",  candles[i].get("min", 0))
+        h = candles[i].get("high", candles[i].get("max", 0))
+        l = candles[i].get("low", candles[i].get("min", 0))
         pc = candles[i-1]["close"]
         trs.append(max(h - l, abs(h - pc), abs(l - pc)))
     return sum(trs[-period:]) / period
@@ -81,7 +82,7 @@ def macd(prices):
         return 0, 0
     macd_line = ema12 - ema26
     # Signal line (9 periodos del macd)
-    return macd_line, macd_line * 0.9  # simplificado
+    return macd_line, macd_line * 0.9
 
 
 def tendencia_lineal(closes, ventana=20):
@@ -106,13 +107,13 @@ def patron_velas(candles):
 
     def norm(c):
         return {
-            "open":  c.get("open", 0),
+            "open": c.get("open", 0),
             "close": c.get("close", 0),
-            "high":  c.get("high", c.get("max", 0)),
-            "low":   c.get("low",  c.get("min", 0)),
+            "high": c.get("high", c.get("max", 0)),
+            "low": c.get("low", c.get("min", 0)),
         }
 
-    c  = norm(candles[-1])
+    c = norm(candles[-1])
     c1 = norm(candles[-2])
     c2 = norm(candles[-3])
 
@@ -143,13 +144,13 @@ def patron_velas(candles):
     sombra_inf = min(c["close"], c["open"]) - c["low"]
     sombra_sup = c["high"] - max(c["close"], c["open"])
     if cuerpo > 0 and sombra_inf >= 2 * cuerpo and sombra_sup < cuerpo:
-        return "BUY", 75
+        return "BUY", 80
 
     # Estrella fugaz bajista
     if cuerpo > 0 and sombra_sup >= 2 * cuerpo and sombra_inf < cuerpo:
-        return "SELL", 75
+        return "SELL", 80
 
-    # Doji — mercado indeciso → usar tendencia
+    # Doji — mercado indeciso
     if cuerpo < (c["high"] - c["low"]) * 0.1:
         return "NEUTRAL", 0
 
@@ -161,27 +162,25 @@ def patron_velas(candles):
 
 
 # ═══════════════════════════════════════════════════════════════
-#  MOTOR PRINCIPAL v4.0 — SIEMPRE DA BUY O SELL
+#  MOTOR PRINCIPAL v4.1 — SEÑALES CONFIABLES
 # ═══════════════════════════════════════════════════════════════
 
 def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     """
-    Motor v4.0 — Siempre genera BUY o SELL.
-    Usa votación ponderada de 10 indicadores.
-    La dirección ganadora siempre se muestra.
+    Motor v4.1 — Señales con alta confiabilidad.
+    Solo genera señal cuando hay consenso fuerte.
     """
     if len(candles) < 10:
-        # Con pocos datos, usar la última vela
         ultima = candles[-1] if candles else {}
         return {
-            "direccion": "BUY" if ultima.get("close", 0) >= ultima.get("open", 0) else "SELL",
-            "confianza": 50,
+            "direccion": "ESPERAR",
+            "confianza": 0,
             "estrategia": "automatica",
             "volatilidad": "media",
             "tendencia": "LATERAL",
-            "razones": ["Datos limitados"],
-            "votos_buy": 1, "votos_sell": 0,
-            "score_buy": 1, "score_sell": 0,
+            "razones": ["Datos insuficientes"],
+            "votos_buy": 0, "votos_sell": 0,
+            "score_buy": 0, "score_sell": 0,
             "indicadores": {}, "fibonacci": {},
             "patrones_velas": [], "timing": {},
         }
@@ -190,177 +189,178 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     precio = closes[-1]
 
     # ── 10 INDICADORES ──────────────────────────────────────────
-    votos_buy  = []
+    votos_buy = []
     votos_sell = []
 
     # 1. TENDENCIA CORTA (5 velas)
-    tend_corta, _ = tendencia_lineal(closes, min(5, len(closes)))
-    if tend_corta == "UP":
-        votos_buy.append(("tendencia_corta", 2))
-    else:
-        votos_sell.append(("tendencia_corta", 2))
+    tend_corta, fuerza_corta = tendencia_lineal(closes, min(5, len(closes)))
+    if fuerza_corta > 0.0005:
+        if tend_corta == "UP":
+            votos_buy.append(("tendencia_corta", 3))
+        else:
+            votos_sell.append(("tendencia_corta", 3))
 
     # 2. TENDENCIA LARGA (20 velas)
-    tend_larga, fuerza = tendencia_lineal(closes, min(20, len(closes)))
-    peso_tend = 3 if fuerza > 0.0001 else 1
-    if tend_larga == "UP":
-        votos_buy.append(("tendencia_larga", peso_tend))
-    else:
-        votos_sell.append(("tendencia_larga", peso_tend))
+    tend_larga, fuerza_larga = tendencia_lineal(closes, min(20, len(closes)))
+    if fuerza_larga > 0.0001:
+        if tend_larga == "UP":
+            votos_buy.append(("tendencia_larga", 4))
+        else:
+            votos_sell.append(("tendencia_larga", 4))
 
     # 3. EMA 5 vs EMA 20
-    ema5  = ema(closes, min(5, len(closes)))
+    ema5 = ema(closes, min(5, len(closes)))
     ema20 = ema(closes, min(20, len(closes)))
-    if ema5 and ema20:
+    if ema5 and ema20 and abs(ema5 - ema20) / precio > 0.001:
         if ema5 > ema20:
-            votos_buy.append(("ema_cruce", 2))
+            votos_buy.append(("ema_cruce", 3))
         else:
-            votos_sell.append(("ema_cruce", 2))
+            votos_sell.append(("ema_cruce", 3))
 
     # 4. EMA 10 vs EMA 50
     ema10 = ema(closes, min(10, len(closes)))
     ema50 = ema(closes, min(50, len(closes))) if len(closes) >= 50 else None
-    if ema10 and ema50:
+    if ema10 and ema50 and abs(ema10 - ema50) / precio > 0.001:
         if ema10 > ema50:
-            votos_buy.append(("ema_lenta", 3))
+            votos_buy.append(("ema_lenta", 4))
         else:
-            votos_sell.append(("ema_lenta", 3))
+            votos_sell.append(("ema_lenta", 4))
 
     # 5. RSI
     rsi_val = rsi(closes, min(14, len(closes) // 2))
-    if rsi_val < 30:
-        votos_buy.append(("rsi_sobrevendido", 4))
-    elif rsi_val < 45:
-        votos_buy.append(("rsi_bajo", 2))
-    elif rsi_val > 70:
-        votos_sell.append(("rsi_sobrecomprado", 4))
-    elif rsi_val > 55:
-        votos_sell.append(("rsi_alto", 2))
-    else:
-        # RSI neutral → seguir tendencia
-        if tend_corta == "UP":
-            votos_buy.append(("rsi_neutral", 1))
-        else:
-            votos_sell.append(("rsi_neutral", 1))
+    if rsi_val < 25:
+        votos_buy.append(("rsi_sobrevendido", 5))
+    elif rsi_val < 35:
+        votos_buy.append(("rsi_bajo", 3))
+    elif rsi_val > 75:
+        votos_sell.append(("rsi_sobrecomprado", 5))
+    elif rsi_val > 65:
+        votos_sell.append(("rsi_alto", 3))
 
     # 6. MACD
     macd_line, signal_line = macd(closes)
-    if macd_line > signal_line:
-        votos_buy.append(("macd", 2))
-    else:
-        votos_sell.append(("macd", 2))
+    if abs(macd_line - signal_line) / precio > 0.0005:
+        if macd_line > signal_line:
+            votos_buy.append(("macd", 3))
+        else:
+            votos_sell.append(("macd", 3))
 
     # 7. MOMENTUM
     mom = momentum(closes, min(5, len(closes) - 1))
     mom_largo = momentum(closes, min(10, len(closes) - 1))
-    if mom > 0 and mom_largo > 0:
-        votos_buy.append(("momentum", 3))
-    elif mom < 0 and mom_largo < 0:
-        votos_sell.append(("momentum", 3))
-    elif mom > 0:
-        votos_buy.append(("momentum_corto", 1))
-    else:
-        votos_sell.append(("momentum_corto", 1))
+    if abs(mom) / precio > 0.001:
+        if mom > 0 and mom_largo > 0:
+            votos_buy.append(("momentum", 4))
+        elif mom < 0 and mom_largo < 0:
+            votos_sell.append(("momentum", 4))
+        elif mom > 0:
+            votos_buy.append(("momentum_corto", 2))
+        else:
+            votos_sell.append(("momentum_corto", 2))
 
     # 8. BOLLINGER BANDS
     bb_up, bb_mid, bb_lo = bollinger(closes, min(20, len(closes)))
     if bb_up and bb_lo:
         if precio <= bb_lo:
-            votos_buy.append(("bollinger_sobrevendido", 4))
+            votos_buy.append(("bollinger_sobrevendido", 5))
         elif precio >= bb_up:
-            votos_sell.append(("bollinger_sobrecomprado", 4))
+            votos_sell.append(("bollinger_sobrecomprado", 5))
         elif precio < bb_mid:
-            votos_buy.append(("bollinger_bajo", 1))
+            votos_buy.append(("bollinger_bajo", 2))
         else:
-            votos_sell.append(("bollinger_alto", 1))
+            votos_sell.append(("bollinger_alto", 2))
 
     # 9. ESTOCÁSTICO
     stoch = stochastico(closes, min(14, len(closes)))
-    if stoch < 20:
-        votos_buy.append(("estocastico_bajo", 3))
-    elif stoch < 40:
-        votos_buy.append(("estocastico_neutro_bajo", 1))
-    elif stoch > 80:
-        votos_sell.append(("estocastico_alto", 3))
-    elif stoch > 60:
-        votos_sell.append(("estocastico_neutro_alto", 1))
+    if stoch < 15:
+        votos_buy.append(("estocastico_bajo", 4))
+    elif stoch < 30:
+        votos_buy.append(("estocastico_neutro_bajo", 2))
+    elif stoch > 85:
+        votos_sell.append(("estocastico_alto", 4))
+    elif stoch > 70:
+        votos_sell.append(("estocastico_neutro_alto", 2))
 
     # 10. PATRÓN DE VELAS
     patron_dir, patron_fuerza = patron_velas(candles)
-    if patron_dir == "BUY":
-        peso_patron = 5 if patron_fuerza >= 85 else 3 if patron_fuerza >= 75 else 2
-        votos_buy.append(("patron_vela", peso_patron))
-    elif patron_dir == "SELL":
-        peso_patron = 5 if patron_fuerza >= 85 else 3 if patron_fuerza >= 75 else 2
-        votos_sell.append(("patron_vela", peso_patron))
+    if patron_dir == "BUY" and patron_fuerza >= 75:
+        votos_buy.append(("patron_vela", 5))
+    elif patron_dir == "SELL" and patron_fuerza >= 75:
+        votos_sell.append(("patron_vela", 5))
 
     # ── DECISIÓN ─────────────────────────────────────────────────
-    peso_buy  = sum(v[1] for v in votos_buy)
+    peso_buy = sum(v[1] for v in votos_buy)
     peso_sell = sum(v[1] for v in votos_sell)
-    total     = peso_buy + peso_sell or 1
+    total = peso_buy + peso_sell or 1
 
-    # SIEMPRE elegir la dirección con más peso
-    if peso_buy >= peso_sell:
+    # Umbral mínimo para señal
+    UMBRAL_MINIMO = 8
+
+    # Determinar dirección solo si hay suficiente peso
+    if peso_buy >= UMBRAL_MINIMO and peso_buy > peso_sell * 1.5:
         direccion = "BUY"
-        confianza = round((peso_buy / total) * 100)
-    else:
+        confianza = min(round((peso_buy / total) * 100), 95)
+        razones = [v[0].replace("_", " ").title() for v in votos_buy[:5]]
+        votos_ganadores = votos_buy
+    elif peso_sell >= UMBRAL_MINIMO and peso_sell > peso_buy * 1.5:
         direccion = "SELL"
-        confianza = round((peso_sell / total) * 100)
+        confianza = min(round((peso_sell / total) * 100), 95)
+        razones = [v[0].replace("_", " ").title() for v in votos_sell[:5]]
+        votos_ganadores = votos_sell
+    else:
+        # Consenso insuficiente → ESPERAR
+        direccion = "ESPERAR"
+        confianza = 0
+        razones = ["Sin consenso claro entre indicadores"]
+        votos_ganadores = []
 
-    # Confianza mínima 50% (siempre hay señal)
-    confianza = max(50, confianza)
-
-    # Timing
+    # ── TIMING ─────────────────────────────────────────────────
     ahora = time.time()
     seg_restantes = timeframe_seg - (ahora % timeframe_seg)
     timing = {
         "segundos_restantes": round(seg_restantes, 1),
-        "puede_entrar": True,
-        "mensaje": f"Entrar en próxima vela — {round(seg_restantes)}s",
+        "puede_entrar": direccion != "ESPERAR",
+        "mensaje": f"Entrar en próxima vela — {round(seg_restantes)}s" if direccion != "ESPERAR" else "Esperar mejor momento",
     }
 
-    # Razones top 5
-    votos_ganadores = votos_buy if direccion == "BUY" else votos_sell
-    razones = [v[0].replace("_", " ").title() for v in votos_ganadores[:5]]
-
-    # Volatilidad
+    # ── VOLATILIDAD ─────────────────────────────────────────────
     atr_val = atr(candles)
     vol_pct = (atr_val / precio * 100) if precio else 0
-    if vol_pct >= 0.35:   vol_nivel = "muy_alta"
+    if vol_pct >= 0.35: vol_nivel = "muy_alta"
     elif vol_pct >= 0.25: vol_nivel = "alta"
     elif vol_pct >= 0.15: vol_nivel = "media_alta"
     elif vol_pct >= 0.05: vol_nivel = "media"
-    else:                  vol_nivel = "baja"
+    else: vol_nivel = "baja"
 
     return {
-        "direccion":        direccion,
-        "estrategia":       "automatica",
-        "volatilidad":      vol_nivel,
-        "tendencia":        tend_larga,
-        "timing":           timing,
-        "razones":          razones,
-        "votos_buy":        len(votos_buy),
-        "votos_sell":       len(votos_sell),
-        "certeza_interna":  confianza,
-        "confianza":        confianza,
-        "score_buy":        peso_buy,
-        "score_sell":       peso_sell,
+        "direccion": direccion,
+        "estrategia": "automatica",
+        "volatilidad": vol_nivel,
+        "tendencia": tend_larga,
+        "timing": timing,
+        "razones": razones,
+        "votos_buy": len(votos_buy),
+        "votos_sell": len(votos_sell),
+        "certeza_interna": confianza,
+        "confianza": confianza,
+        "score_buy": peso_buy,
+        "score_sell": peso_sell,
         "indicadores": {
-            "precio":          round(precio, 6),
-            "rsi":             round(rsi_val, 1),
-            "momentum":        round(mom, 6),
-            "estocastico":     round(stoch, 1),
-            "macd":            round(macd_line, 6),
-            "ema_rapida":      round(ema5, 6) if ema5 else None,
-            "ema_lenta":       round(ema20, 6) if ema20 else None,
-            "bb_superior":     round(bb_up, 6) if bb_up else None,
-            "bb_inferior":     round(bb_lo, 6) if bb_lo else None,
-            "patron_vela":     patron_dir,
+            "precio": round(precio, 6),
+            "rsi": round(rsi_val, 1),
+            "momentum": round(mom, 6) if mom else 0,
+            "estocastico": round(stoch, 1),
+            "macd": round(macd_line, 6),
+            "ema_rapida": round(ema5, 6) if ema5 else None,
+            "ema_lenta": round(ema20, 6) if ema20 else None,
+            "bb_superior": round(bb_up, 6) if bb_up else None,
+            "bb_inferior": round(bb_lo, 6) if bb_lo else None,
+            "patron_vela": patron_dir,
             "volatilidad_pct": round(vol_pct, 4),
         },
-        "fibonacci":      {"niveles": {}, "zona_actual": None, "precio_zona": None},
+        "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
         "patrones_velas": [{"patron": patron_dir, "fuerza": patron_fuerza}] if patron_fuerza > 0 else [],
-        "movimiento":     {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
+        "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
     }
 
 
@@ -372,28 +372,32 @@ def detectar_volatilidad(candles, periodo=14):
     if not candles:
         return "media"
     atr_val = atr(candles, periodo)
-    precio  = candles[-1].get("close", 1)
-    pct     = (atr_val / precio * 100) if precio else 0
-    if pct >= 0.35:   return "muy_alta"
+    precio = candles[-1].get("close", 1)
+    pct = (atr_val / precio * 100) if precio else 0
+    if pct >= 0.35: return "muy_alta"
     elif pct >= 0.25: return "alta"
     elif pct >= 0.15: return "media_alta"
     elif pct >= 0.05: return "media"
     return "baja"
 
+
 def seleccionar_estrategia_auto(candles):
     return "automatica", detectar_volatilidad(candles)
+
 
 def calcular_volatilidad_real(candles, periodo=14):
     if not candles:
         return 0.0, "media"
     atr_val = atr(candles, periodo)
-    precio  = candles[-1].get("close", 1)
-    pct     = round((atr_val / precio * 100) if precio else 0, 4)
+    precio = candles[-1].get("close", 1)
+    pct = round((atr_val / precio * 100) if precio else 0, 4)
     return pct, detectar_volatilidad(candles)
+
 
 def calcular_volatilidad_real_simple(candles, periodo=14):
     pct, _ = calcular_volatilidad_real(candles, periodo)
     return pct
+
 
 def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
     resultados = []
@@ -402,22 +406,27 @@ def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
             continue
         try:
             r = generar_senal(candles, "auto", timeframe_seg)
-            resultados.append({
-                "activo":      activo,
-                "direccion":   r["direccion"],
-                "certeza":     r.get("confianza", 50),
-                "volatilidad": r.get("volatilidad", "media"),
-                "analisis":    r,
-            })
+            if r.get("direccion") in ("BUY", "SELL") and r.get("confianza", 0) >= 65:
+                resultados.append({
+                    "activo": activo,
+                    "direccion": r["direccion"],
+                    "certeza": r.get("confianza", 0),
+                    "volatilidad": r.get("volatilidad", "media"),
+                    "razones": r.get("razones", []),
+                    "analisis": r,
+                })
         except Exception:
             continue
+
     resultados.sort(key=lambda x: x["certeza"], reverse=True)
+
     if not resultados:
-        return {"ok": False, "mensaje": "Sin datos", "activos": []}
+        return {"ok": False, "mensaje": "Sin señales claras ahora", "activos": []}
+
     mejor = resultados[0]
     return {
-        "ok":      True,
-        "mensaje": f"{mejor['activo']} → {mejor['direccion']}",
-        "mejor":   mejor,
+        "ok": True,
+        "mensaje": f"{mejor['activo']} → {mejor['direccion']} (confianza: {mejor['certeza']}%)",
+        "mejor": mejor,
         "activos": resultados[:5],
     }
