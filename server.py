@@ -2,7 +2,7 @@
 server.py — IQ Option Bot API v7.1
 - Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD de Railway
 - Cache de activos (respuesta instantánea)
-- Velas en tiempo real (Blitz)
+- Velas en tiempo real (Blitz) - FORZADO A 60 SEGUNDOS
 - Señales con hora de entrada
 """
 
@@ -55,6 +55,9 @@ streams_lock    = threading.Lock()
 # ── Cache de activos ─────────────────────────────────────────────
 _cache_activos    = []
 _cache_activos_ts = 0
+
+# ── FORZAR INTERVALO A 60 SEGUNDOS ──────────────────────────────
+INTERVALO_FIJO = 60  # Cambia este valor para usar otro intervalo
 
 # ════════════════════════════════════════════════════════════════
 #  HELPERS
@@ -185,7 +188,6 @@ def _precargar_activos():
                 if payout <= 0:
                     continue
                 # Solo activos con payout real minimo 80%
-                # (activos cerrados tienen payout muy bajo)
                 if payout < 80:
                     continue
                 resultado.append({
@@ -221,6 +223,7 @@ def raiz():
         "estado":    "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
+        "intervalo_fijo": INTERVALO_FIJO,
     })
 
 @app.route("/iq/ping")
@@ -231,6 +234,7 @@ def ping():
         "email":            sesion["email"] if sesion["conectado"] else None,
         "cuenta":           sesion["cuenta"],
         "activos_en_cache": len(_cache_activos),
+        "intervalo_fijo":   INTERVALO_FIJO,
         "timestamp":        int(time.time()),
     })
 
@@ -305,7 +309,6 @@ def activos_blitz():
                 vistos.add(activo)
                 profit_info=profits.get(activo,{})
                 payout=round((profit_info.get("turbo",0) or 0)*100,1)
-                # Solo activos con payout >= 80%
                 if payout < 80:
                     continue
                 resultado.append({
@@ -321,13 +324,20 @@ def activos_blitz():
 @app.route("/iq/velas/live")
 @requiere_conexion
 def velas_live():
+    """
+    Devuelve velas en tiempo real.
+    FORZADO a intervalo fijo de 60 segundos.
+    El parámetro 'intervalo' del frontend es IGNORADO.
+    """
     api       = sesion["api"]
     activo    = normalizar_activo(request.args.get("activo","EURUSD-OTC"))
-    intervalo = int(request.args.get("intervalo",60))  # Cambiado de 5 a 60
+    # IGNORAR el intervalo que envía el frontend - FORZAR 60 SEGUNDOS
+    intervalo = INTERVALO_FIJO
     cantidad  = int(request.args.get("cantidad",60))
     clave     = f"{activo}_{intervalo}"
-    if intervalo not in [1,5,10,15,30,60,120,300,600,900,1800,3600]:
-        intervalo = 60  # Cambiado de 5 a 60
+    
+    log.info(f"📊 Velas {activo} - intervalo FORZADO a {intervalo}s (frontend solicitó {request.args.get('intervalo', 'N/A')})")
+    
     try:
         with streams_lock:
             if clave not in streams_activos:
@@ -360,6 +370,7 @@ def velas_live():
             "intervalo":intervalo,"precio":precio_actual,"tendencia":tendencia,
             "vela_cierra_en":intervalo-(ahora%intervalo),
             "server_time":ahora,"velas":velas_fmt,
+            "nota": f"Intervalo FORZADO a {intervalo}s (ignorando solicitud del frontend)"
         })
     except Exception as e:
         return jsonify({"error":str(e)}), 500
@@ -369,7 +380,7 @@ def velas_live():
 def velas_stop():
     api=sesion["api"]
     activo=normalizar_activo(request.args.get("activo","EURUSD-OTC"))
-    intervalo=int(request.args.get("intervalo",60))  # Cambiado de 5 a 60
+    intervalo=INTERVALO_FIJO  # Usar el intervalo fijo
     clave=f"{activo}_{intervalo}"
     try:
         with streams_lock:
@@ -397,18 +408,8 @@ def senal():
     duracion_min = float(body.get("duracion", 1))
     cantidad     = int(body.get("cantidad_velas", 150))
 
-    # Intervalo óptimo de vela según duración de operación
-    duracion_seg = duracion_min * 60
-    if duracion_seg <= 30:
-        intervalo = 60  # Cambiado de 5 a 60
-    elif duracion_seg <= 60:
-        intervalo = 60  # Cambiado de 10 a 60
-    elif duracion_seg <= 120:
-        intervalo = 60  # Cambiado de 15 a 60
-    elif duracion_seg <= 300:
-        intervalo = 60  # Cambiado de 30 a 60
-    else:
-        intervalo = 60
+    # INTERVALO FIJO DE 60 SEGUNDOS
+    intervalo = INTERVALO_FIJO
 
     try:
         raw = api.get_candles(activo, intervalo, cantidad, time.time())
@@ -431,8 +432,8 @@ def senal():
 
         # La entrada es exactamente cuando cierra la vela actual
         ts_entrada  = ahora_ts + seg_para_cierre
-        ts_salida   = ts_entrada + duracion_seg
-        ts_verificar = ts_entrada + (duracion_seg / 2)
+        ts_salida   = ts_entrada + (duracion_min * 60)
+        ts_verificar = ts_entrada + ((duracion_min * 60) / 2)
 
         hora_entrada   = datetime.fromtimestamp(ts_entrada,  tz=timezone.utc).strftime("%H:%M:%S")
         hora_salida    = datetime.fromtimestamp(ts_salida,   tz=timezone.utc).strftime("%H:%M:%S")
@@ -461,7 +462,7 @@ def senal():
             "mensaje_entrada":      f"Entrar a las {hora_entrada}",
 
             # INFO OPERACIÓN
-            "duracion_seg":         int(duracion_seg),
+            "duracion_seg":         int(duracion_min * 60),
             "duracion_min":         duracion_min,
             "intervalo_vela":       intervalo,
             "proxima_vela_en":      round(seg_para_cierre, 1),
@@ -476,6 +477,7 @@ def senal():
             "razones":              resultado.get("razones", []),
             "indicadores":          resultado.get("indicadores", {}),
             "timing":               resultado.get("timing", {}),
+            "nota_intervalo":       f"Intervalo FORZADO a {intervalo}s",
         })
 
     except Exception as e:
@@ -487,5 +489,6 @@ if __name__ == "__main__":
     print("="*60)
     print("  IQ Option Bot API  v7.1")
     print(f"  http://0.0.0.0:{port}")
+    print(f"  📊 Intervalo de velas FORZADO a {INTERVALO_FIJO} segundos")
     print("="*60)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
