@@ -184,6 +184,10 @@ def _precargar_activos():
                 payout = round((info.get("turbo", 0) or 0) * 100, 1)
                 if payout <= 0:
                     continue
+                # Solo activos con payout real minimo 80%
+                # (activos cerrados tienen payout muy bajo)
+                if payout < 80:
+                    continue
                 resultado.append({
                     "ticker":  activo,
                     "nombre":  _nombre_legible(activo),
@@ -195,7 +199,7 @@ def _precargar_activos():
             resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
             _cache_activos    = resultado
             _cache_activos_ts = time.time()
-            log.info(f"✅ Cache activos: {len(resultado)} activos cargados")
+            log.info(f"✅ Cache activos: {len(resultado)} activos cargados (payout >= 80%)")
 
         except Exception as e:
             log.error(f"Error precargando activos: {e}")
@@ -301,6 +305,9 @@ def activos_blitz():
                 vistos.add(activo)
                 profit_info=profits.get(activo,{})
                 payout=round((profit_info.get("turbo",0) or 0)*100,1)
+                # Solo activos con payout >= 80%
+                if payout < 80:
+                    continue
                 resultado.append({
                     "ticker":activo,"nombre":_nombre_legible(activo),
                     "es_otc":"OTC" in activo.upper(),"payout":payout,"abierto":True
