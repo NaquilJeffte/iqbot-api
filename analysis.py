@@ -1,4 +1,4 @@
-"""
+""" 
 analysis.py v3.0 — Motor de señales con timing perfecto
 - Python decide todo automaticamente
 - Calcula el momento OPTIMO de entrada
