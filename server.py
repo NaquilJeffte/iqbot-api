@@ -1,10 +1,10 @@
 """
-server.py — IQ Option Bot API v7.4
+server.py — IQ Option Bot API v7.5
 - Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD
 - Cache de activos (respuesta instantánea)
 - Velas en tiempo real (Blitz) - FORZADO A 60 SEGUNDOS
-- ENTRADA SIEMPRE basada en hora del BROKER (UTC-6)
-- NEXT VELA calculado correctamente
+- ENTRADA SIEMPRE en el PRÓXIMO minuto exacto (HH:MM:00)
+- Zona horaria del BROKER (UTC-6)
 """
 
 import sys, os
@@ -224,7 +224,7 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api":       "IQ Option Bot API",
-        "version":   "7.4",
+        "version":   "7.5",
         "estado":    "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
@@ -393,7 +393,8 @@ def velas_stop():
 def senal():
     """
     LÓGICA DE TIMING CORREGIDA:
-    - La entrada SIEMPRE es al inicio de la vela (00:00 o 00:01)
+    - La entrada SIEMPRE es en el PRÓXIMO minuto exacto (HH:MM:00)
+    - NUNCA entrar en el momento actual
     - Calculado basado en la HORA DEL BROKER (UTC-6)
     - NEXT VELA muestra los segundos REALES hasta la entrada
     """
@@ -414,7 +415,7 @@ def senal():
         candles   = [raw_a_vela(c) for c in raw]
         resultado = generar_senal(candles, "auto", intervalo)
 
-        # ── TIMING BASADO EN HORA DEL BROKER ─────────────────────
+        # ── TIMING: SIEMPRE AL PRÓXIMO MINUTO EXACTO ────────────
         ahora_ts = time.time()
         
         # Obtener hora actual del broker (UTC-6)
@@ -423,17 +424,19 @@ def senal():
         # Calcular segundos transcurridos en el minuto actual
         segundos_en_minuto = ahora_broker.second + (ahora_broker.microsecond / 1000000)
         
-        # Calcular segundos hasta el próximo minuto exacto (00:00 o 00:01)
+        # SIEMPRE redondear al PRÓXIMO minuto (NUNCA al actual)
         if segundos_en_minuto == 0:
-            seg_para_entrar = 0
+            # Si estamos exactamente en 00:00, esperar al próximo minuto (60s)
+            seg_para_entrar = 60
         else:
+            # Calcular segundos hasta el próximo minuto
             seg_para_entrar = 60 - segundos_en_minuto
         
-        # Si falta menos de 1 segundo, esperar al siguiente minuto
+        # Asegurar que nunca sea 0 (siempre al menos 1 segundo)
         if seg_para_entrar < 1:
-            seg_para_entrar += 60
+            seg_para_entrar = 60
         
-        # Timestamp de entrada (en segundos UNIX)
+        # Timestamp de entrada (PRÓXIMO minuto exacto)
         ts_entrada = ahora_ts + seg_para_entrar
         
         # ── CALCULAR SALIDA ──────────────────────────────────────
@@ -454,7 +457,7 @@ def senal():
 
         # ── SEGUNDOS RESTANTES (REDONDEADOS) ────────────────────
         seg_restantes = max(0, round(seg_para_entrar, 1))
-        es_inicio_exacto = entrada_broker.second == 0 or entrada_broker.second == 1
+        es_inicio_exacto = entrada_broker.second == 0
 
         # ── DEBUG: LOG PARA VERIFICAR ────────────────────────────
         log.info(f"🔍 TIMING: ahora_broker={ahora_broker.strftime('%H:%M:%S')}, "
@@ -485,7 +488,7 @@ def senal():
             "hora_verificar":       hora_verificar,
             "segundos_para_entrar": seg_restantes,  # ← ESTE ES EL "NEXT VELA"
             "entrada_exacta":       es_inicio_exacto,
-            "mensaje_entrada":      f"Entrar a las {hora_entrada} (hora broker)",
+            "mensaje_entrada":      f"Entrar a las {hora_entrada} (inicio de vela)",
             "timezone":             "UTC-6",
 
             # INFO OPERACIÓN
@@ -511,10 +514,10 @@ def senal():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",8080))
     print("="*60)
-    print("  IQ Option Bot API  v7.4")
+    print("  IQ Option Bot API  v7.5")
     print(f"  http://0.0.0.0:{port}")
     print(f"  📊 Intervalo de velas: {INTERVALO_FIJO}s")
-    print("  🎯 Entrada SIEMPRE en 00:00 o 00:01 (inicio de vela)")
+    print("  🎯 Entrada SIEMPRE en el PRÓXIMO minuto exacto (HH:MM:00)")
     print("  🕐 Zona horaria del BROKER: UTC-6")
     print("  ⏱️  NEXT VELA calculado correctamente")
     print("="*60)
