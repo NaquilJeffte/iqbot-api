@@ -1,10 +1,10 @@
 """
-analysis.py v10.3 — BUSCADOR DE PATRONES MEJORADO
-- Busca patrones SIMILARES (no solo idénticos)
-- Acepta 1 vela de diferencia
+analysis.py v11.1 — BUSCADOR DE PATRONES OPTIMIZADO
+- Optimizado para escaneo RÁPIDO de TODOS los activos
+- Busca patrones SIMILARES (permite 1 diferencia)
 - Mínimo 3 repeticiones para señal
 - Confianza calculada con pesos
-- Hasta 10000 velas analizadas
+- Rápido y eficiente para escanear 200+ activos
 """
 
 import math
@@ -12,39 +12,37 @@ import time
 from collections import defaultdict
 
 # ═══════════════════════════════════════════════════════════════
-#  CONFIGURACIÓN
+#  CONFIGURACIÓN RÁPIDA (optimizada para escaneo)
 # ═══════════════════════════════════════════════════════════════
 
 MIN_REPETICIONES = 3       # Mínimo 3 repeticiones para señal
 CONFIANZA_MINIMA = 60      # Mínimo 60% de acierto
 TOLERANCIA_COLOR = 1       # 1 vela de diferencia permitida
+VELAS_A_ANALIZAR = 300     # Velas por activo (balance velocidad/precisión)
+MAX_VELAS_HISTORIAL = 300  # Máximo de velas para buscar patrones
 
 # ═══════════════════════════════════════════════════════════════
-#  CREAR FIRMA DE PATRÓN
+#  CREAR FIRMA DE PATRÓN (RÁPIDO)
 # ═══════════════════════════════════════════════════════════════
 
-def crear_firma_velas(candles, cantidad=5):
-    """Crea firma de las últimas N velas"""
+def crear_firma_velas_rapida(candles, cantidad=5):
+    """Crea firma rápida de las últimas N velas (optimizada)"""
     if len(candles) < cantidad:
         return None
     
-    # Colores: V (verde) / R (roja)
     colores = []
-    # Tamaños: G (grande) / M (medio) / P (pequeño)
     tamanos = []
-    # Sombras: S (superior) / I (inferior) / N (normal)
-    sombras = []
     
     for i in range(cantidad):
         vela = candles[-(i+1)]
         
-        # Color
+        # Color (rápido)
         if vela["close"] > vela["open"]:
             colores.append("V")
         else:
             colores.append("R")
         
-        # Tamaño del cuerpo
+        # Tamaño (rápido)
         cuerpo = abs(vela["close"] - vela["open"])
         rango = vela["high"] - vela["low"] if vela["high"] != vela["low"] else 0.00001
         
@@ -54,33 +52,21 @@ def crear_firma_velas(candles, cantidad=5):
             tamanos.append("M")
         else:
             tamanos.append("P")
-        
-        # Sombra
-        sombra_sup = vela["high"] - max(vela["close"], vela["open"])
-        sombra_inf = min(vela["close"], vela["open"]) - vela["low"]
-        
-        if sombra_sup > sombra_inf * 2:
-            sombras.append("S")  # Sombra superior larga (resistencia)
-        elif sombra_inf > sombra_sup * 2:
-            sombras.append("I")  # Sombra inferior larga (soporte)
-        else:
-            sombras.append("N")  # Normal
     
     return {
         "colores": "".join(colores),
         "tamanos": "".join(tamanos),
-        "sombras": "".join(sombras),
-        "firma_completa": "".join(colores) + "|" + "".join(tamanos) + "|" + "".join(sombras),
+        "firma_completa": "".join(colores) + "|" + "".join(tamanos),
         "firma_colores": "".join(colores),
     }
 
 # ═══════════════════════════════════════════════════════════════
-#  BUSCAR PATRONES EN HISTORIAL
+#  BUSCAR PATRONES (OPTIMIZADO PARA ESCANEO)
 # ═══════════════════════════════════════════════════════════════
 
-def buscar_patron_flexible(candles_historicas, patron_actual, profundidad=10000):
+def buscar_patron_rapido(candles_historicas, patron_actual, profundidad=300):
     """
-    Busca patrones SIMILARES en el historial
+    Busca patrones SIMILARES (optimizado para velocidad)
     """
     if len(candles_historicas) < 10:
         return []
@@ -91,45 +77,66 @@ def buscar_patron_flexible(candles_historicas, patron_actual, profundidad=10000)
     
     limite = min(len(candles_historicas) - 5, profundidad)
     
+    # Búsqueda eficiente
     for i in range(limite):
         bloque = candles_historicas[i:i+5]
         if len(bloque) < 5:
             continue
         
-        firma_bloque = crear_firma_velas(bloque, 5)
-        if not firma_bloque:
-            continue
+        # Crear firma del bloque
+        v1, v2, v3, v4, v5 = bloque[0], bloque[1], bloque[2], bloque[3], bloque[4]
+        
+        # Colores
+        c1 = "V" if v1["close"] > v1["open"] else "R"
+        c2 = "V" if v2["close"] > v2["open"] else "R"
+        c3 = "V" if v3["close"] > v3["open"] else "R"
+        c4 = "V" if v4["close"] > v4["open"] else "R"
+        c5 = "V" if v5["close"] > v5["open"] else "R"
+        
+        colores = c1 + c2 + c3 + c4 + c5
+        
+        # Tamaños
+        def get_size(vela):
+            cuerpo = abs(vela["close"] - vela["open"])
+            rango = vela["high"] - vela["low"] if vela["high"] != vela["low"] else 0.00001
+            if cuerpo / rango > 0.7:
+                return "G"
+            elif cuerpo / rango > 0.3:
+                return "M"
+            return "P"
+        
+        t1, t2, t3, t4, t5 = get_size(v1), get_size(v2), get_size(v3), get_size(v4), get_size(v5)
+        tamanos = t1 + t2 + t3 + t4 + t5
+        
+        firma_completa = colores + "|" + tamanos
         
         # COINCIDENCIA EXACTA
-        es_exacta = firma_bloque["firma_completa"] == firma_buscar_completa
+        es_exacta = firma_completa == firma_buscar_completa
         
         # COINCIDENCIA DE COLORES (permite 1 diferencia)
-        coincidencia_colores = sum(1 for a, b in zip(firma_bloque["colores"], firma_buscar_colores) if a == b)
+        coincidencia_colores = sum(1 for a, b in zip(colores, firma_buscar_colores) if a == b)
         es_similar = coincidencia_colores >= (5 - TOLERANCIA_COLOR)
         
         if es_exacta or es_similar:
             if i + 5 < len(candles_historicas):
                 siguiente = candles_historicas[i+5]
-                # Calcular cambio real
                 cambio = (siguiente["close"] - siguiente["open"]) / siguiente["open"] * 100
                 resultados.append({
                     "direccion": "UP" if siguiente["close"] > siguiente["open"] else "DOWN",
                     "cambio": cambio,
                     "exacto": es_exacta,
                     "coincidencia": coincidencia_colores,
-                    "precio_entrada": siguiente["open"],
-                    "precio_salida": siguiente["close"],
                 })
     
     return resultados
 
 # ═══════════════════════════════════════════════════════════════
-#  ANALIZAR RESULTADOS
+#  ANALIZAR RESULTADOS (RÁPIDO)
 # ═══════════════════════════════════════════════════════════════
 
-def analizar_resultados(resultados):
+def analizar_resultados_rapido(resultados):
     """
-    Analiza los resultados de la búsqueda de patrones
+    Analiza resultados (optimizado para velocidad)
     """
     if not resultados:
         return {
@@ -145,19 +152,28 @@ def analizar_resultados(resultados):
         }
     
     total = len(resultados)
-    up_count = sum(1 for r in resultados if r["direccion"] == "UP")
-    down_count = total - up_count
-    exactos = sum(1 for r in resultados if r["exacto"])
-    similares = total - exactos
+    up_count = 0
+    down_count = 0
+    exactos = 0
+    suma_cambios = 0
     
+    for r in resultados:
+        if r["direccion"] == "UP":
+            up_count += 1
+        else:
+            down_count += 1
+        if r["exacto"]:
+            exactos += 1
+        suma_cambios += r["cambio"]
+    
+    similares = total - exactos
     pct_up = (up_count / total) * 100
     pct_down = (down_count / total) * 100
-    
-    cambio_promedio = sum(r["cambio"] for r in resultados) / total
+    cambio_promedio = suma_cambios / total if total > 0 else 0
     
     # Confianza = % de acierto + bonus por exactos
     pct_ganador = max(pct_up, pct_down)
-    bonus_exactos = (exactos / total) * 10  # Hasta +10% por exactos
+    bonus_exactos = (exactos / total) * 10 if total > 0 else 0
     confianza = min(pct_ganador + bonus_exactos, 98)
     
     return {
@@ -175,10 +191,11 @@ def analizar_resultados(resultados):
     }
 
 # ═══════════════════════════════════════════════════════════════
-#  INDICADORES DE CONFIRMACIÓN
+#  INDICADORES DE CONFIRMACIÓN (RÁPIDOS)
 # ═══════════════════════════════════════════════════════════════
 
-def ema(prices, period):
+def ema_rapida(prices, period):
+    """EMA rápido"""
     if len(prices) < period:
         return None
     k = 2 / (period + 1)
@@ -187,10 +204,12 @@ def ema(prices, period):
         val = p * k + val * (1 - k)
     return val
 
-def rsi(prices, period=14):
+def rsi_rapida(prices, period=14):
+    """RSI rápido"""
     if len(prices) < period + 1:
         return 50.0
-    gains = losses = 0.0
+    gains = 0.0
+    losses = 0.0
     for i in range(len(prices) - period, len(prices)):
         d = prices[i] - prices[i-1]
         if d > 0:
@@ -204,7 +223,8 @@ def rsi(prices, period=14):
     rs = (gains / period) / (losses / period)
     return 100 - 100 / (1 + rs)
 
-def tendencia_lineal(closes, ventana=20):
+def tendencia_rapida(closes, ventana=20):
+    """Tendencia rápida"""
     if len(closes) < ventana:
         return "LATERAL", 0
     sub = closes[-ventana:]
@@ -222,33 +242,34 @@ def tendencia_lineal(closes, ventana=20):
     return ("UP" if slope > 0 else "DOWN"), round(slope_pct, 2)
 
 # ═══════════════════════════════════════════════════════════════
-#  MOTOR PRINCIPAL v10.3
+#  MOTOR PRINCIPAL v11.1 — OPTIMIZADO PARA ESCANEO
 # ═══════════════════════════════════════════════════════════════
 
 def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     """
-    MOTOR v10.3 — BUSCADOR DE PATRONES MEJORADO
+    MOTOR v11.1 — Optimizado para escaneo rápido de TODOS los activos
     - Busca patrones SIMILARES (permite 1 diferencia)
     - Mínimo 3 repeticiones
     - Confianza con bonus por coincidencias exactas
-    - Confirmación con indicadores
+    - Confirmación con indicadores rápidos
     """
     if len(candles) < 30:
         return {
             "direccion": "ESPERAR",
             "confianza": 0,
-            "razones": ["Datos insuficientes (necesita 30 velas)"],
+            "razones": ["Datos insuficientes"],
             "votos_buy": 0,
             "votos_sell": 0,
             "patrones_encontrados": 0,
             "pct_acierto": 0,
         }
 
-    closes = [c["close"] for c in candles]
+    # Usar solo las últimas velas para velocidad
+    closes = [c["close"] for c in candles[-VELAS_A_ANALIZAR:]]
     precio = closes[-1]
 
     # ── 1. CREAR FIRMA DEL PATRÓN ACTUAL ──────────────────────
-    patron_actual = crear_firma_velas(candles, 5)
+    patron_actual = crear_firma_velas_rapida(candles, 5)
     if not patron_actual:
         return {
             "direccion": "ESPERAR",
@@ -257,22 +278,19 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
             "patrones_encontrados": 0,
         }
 
-    # ── 2. BUSCAR PATRONES SIMILARES ──────────────────────────
-    resultados = buscar_patron_flexible(candles[:-1], patron_actual, 10000)
+    # ── 2. BUSCAR PATRONES EN HISTORIAL ────────────────────────
+    historial = candles[:-1]  # Excluir la vela actual
+    resultados = buscar_patron_rapido(historial, patron_actual, MAX_VELAS_HISTORIAL)
     
     # ── 3. ANALIZAR RESULTADOS ────────────────────────────────
-    analisis = analizar_resultados(resultados)
+    analisis = analizar_resultados_rapido(resultados)
     
-    # ── 4. INDICADORES DE CONFIRMACIÓN ────────────────────────
-    # Tendencia
-    tendencia, fuerza_tendencia = tendencia_lineal(closes, 20)
+    # ── 4. INDICADORES DE CONFIRMACIÓN (rápidos) ─────────────
+    tendencia, fuerza_tendencia = tendencia_rapida(closes, 20)
+    rsi_val = rsi_rapida(closes, 14)
     
-    # RSI
-    rsi_val = rsi(closes, 14)
-    
-    # EMA 5 vs 20
-    ema5 = ema(closes, 5)
-    ema20 = ema(closes, 20)
+    ema5 = ema_rapida(closes, 5)
+    ema20 = ema_rapida(closes, 20)
     ema_dir = "NEUTRAL"
     if ema5 and ema20:
         if ema5 > ema20:
@@ -300,34 +318,34 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     # Voto del patrón (peso 5)
     if direccion_patron == "BUY":
         votos_buy += 5
-        razones.append(f"Patrón REPETIDO: {analisis['total']} veces, {analisis['pct_up']}% acierto")
+        razones.append(f"Patrón: {analisis['total']}x, {analisis['pct_up']}%")
     elif direccion_patron == "SELL":
         votos_sell += 5
-        razones.append(f"Patrón REPETIDO: {analisis['total']} veces, {analisis['pct_down']}% acierto")
+        razones.append(f"Patrón: {analisis['total']}x, {analisis['pct_down']}%")
     
     # Voto de tendencia (peso 3)
     if tendencia == "UP":
         votos_buy += 3
-        razones.append(f"Tendencia ALCISTA (fuerza: {fuerza_tendencia}%)")
+        razones.append(f"Tendencia UP ({fuerza_tendencia}%)")
     elif tendencia == "DOWN":
         votos_sell += 3
-        razones.append(f"Tendencia BAJISTA (fuerza: {fuerza_tendencia}%)")
+        razones.append(f"Tendencia DOWN ({fuerza_tendencia}%)")
     
     # Voto de RSI (peso 2)
     if rsi_val < 30:
         votos_buy += 2
-        razones.append(f"RSI sobrevendido: {round(rsi_val)}%")
+        razones.append(f"RSI {round(rsi_val)} (sobrevendido)")
     elif rsi_val > 70:
         votos_sell += 2
-        razones.append(f"RSI sobrecomprado: {round(rsi_val)}%")
+        razones.append(f"RSI {round(rsi_val)} (sobrecomprado)")
     
     # Voto de EMA (peso 2)
     if ema_dir == "BUY":
         votos_buy += 2
-        razones.append("EMA 5 > EMA 20 (alcista)")
+        razones.append("EMA 5 > 20 (alcista)")
     elif ema_dir == "SELL":
         votos_sell += 2
-        razones.append("EMA 5 < EMA 20 (bajista)")
+        razones.append("EMA 5 < 20 (bajista)")
     
     # ── 7. DECISIÓN FINAL ──────────────────────────────────────
     if votos_buy >= 5 and votos_buy > votos_sell * 1.3:
@@ -339,7 +357,7 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     else:
         direccion = "ESPERAR"
         confianza = 0
-        razones = ["No hay confirmación suficiente para BUY/SELL"]
+        razones = ["Sin confirmación suficiente"]
 
     return {
         "direccion": direccion,
@@ -374,7 +392,7 @@ def detectar_volatilidad(candles, periodo=14):
     return "media"
 
 def seleccionar_estrategia_auto(candles):
-    return "patrones", "media"
+    return "patrones_rapidos", "media"
 
 def calcular_volatilidad_real(candles, periodo=14):
     return 0.0, "media"
