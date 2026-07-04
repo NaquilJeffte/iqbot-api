@@ -1,9 +1,10 @@
 """
-server.py — IQ Option Bot API v7.3
-- Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD de Railway/Render
+server.py — IQ Option Bot API v7.4
+- Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD
 - Cache de activos (respuesta instantánea)
 - Velas en tiempo real (Blitz) - FORZADO A 60 SEGUNDOS
-- ENTRADA SIEMPRE en hora del BROKER (UTC-6)
+- ENTRADA SIEMPRE basada en hora del BROKER (UTC-6)
+- NEXT VELA calculado correctamente
 """
 
 import sys, os
@@ -21,7 +22,6 @@ CORS(app, origins="*", allow_headers=["Content-Type","Accept","Authorization","X
      methods=["GET","POST","OPTIONS"])
 
 # ── ZONA HORARIA DEL BROKER (IQ Option) ─────────────────────────
-# IQ Option usa UTC-6 (México/Centro América)
 BROKER_TIMEZONE = timezone(timedelta(hours=-6))
 
 @app.before_request
@@ -224,7 +224,7 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api":       "IQ Option Bot API",
-        "version":   "7.3",
+        "version":   "7.4",
         "estado":    "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
@@ -392,9 +392,10 @@ def velas_stop():
 @requiere_conexion
 def senal():
     """
-    LÓGICA DE TIMING:
+    LÓGICA DE TIMING CORREGIDA:
     - La entrada SIEMPRE es al inicio de la vela (00:00 o 00:01)
-    - HORA del BROKER (UTC-6) - misma que muestra IQ Option
+    - Calculado basado en la HORA DEL BROKER (UTC-6)
+    - NEXT VELA muestra los segundos REALES hasta la entrada
     """
     api  = sesion["api"]
     body = request.get_json(force=True)
@@ -413,24 +414,29 @@ def senal():
         candles   = [raw_a_vela(c) for c in raw]
         resultado = generar_senal(candles, "auto", intervalo)
 
-        # ── TIMING: ENTRADA EN HORA DEL BROKER ──────────────────
+        # ── TIMING BASADO EN HORA DEL BROKER ─────────────────────
         ahora_ts = time.time()
         
         # Obtener hora actual del broker (UTC-6)
         ahora_broker = hora_broker(ahora_ts)
-        seg_en_vela = ahora_broker.second  # Segundos dentro del minuto
         
-        if seg_en_vela == 0:
+        # Calcular segundos transcurridos en el minuto actual
+        segundos_en_minuto = ahora_broker.second + (ahora_broker.microsecond / 1000000)
+        
+        # Calcular segundos hasta el próximo minuto exacto (00:00 o 00:01)
+        if segundos_en_minuto == 0:
             seg_para_entrar = 0
-            ts_entrada = ahora_ts
         else:
-            seg_para_entrar = 60 - seg_en_vela  # Siempre 60 segundos por minuto
-            ts_entrada = ahora_ts + seg_para_entrar
+            seg_para_entrar = 60 - segundos_en_minuto
         
+        # Si falta menos de 1 segundo, esperar al siguiente minuto
         if seg_para_entrar < 1:
             seg_para_entrar += 60
-            ts_entrada = ahora_ts + seg_para_entrar
-
+        
+        # Timestamp de entrada (en segundos UNIX)
+        ts_entrada = ahora_ts + seg_para_entrar
+        
+        # ── CALCULAR SALIDA ──────────────────────────────────────
         duracion_seg = duracion_min * 60
         ts_salida = ts_entrada + duracion_seg
         ts_verificar = ts_entrada + (duracion_seg / 2)
@@ -446,8 +452,15 @@ def senal():
         hora_salida = salida_broker.strftime("%H:%M:%S")
         hora_verificar = verificar_broker.strftime("%H:%M:%S")
 
-        seg_restantes = max(0, round(ts_entrada - ahora_ts, 1))
+        # ── SEGUNDOS RESTANTES (REDONDEADOS) ────────────────────
+        seg_restantes = max(0, round(seg_para_entrar, 1))
         es_inicio_exacto = entrada_broker.second == 0 or entrada_broker.second == 1
+
+        # ── DEBUG: LOG PARA VERIFICAR ────────────────────────────
+        log.info(f"🔍 TIMING: ahora_broker={ahora_broker.strftime('%H:%M:%S')}, "
+                 f"seg_en_minuto={round(segundos_en_minuto, 2)}, "
+                 f"seg_para_entrar={round(seg_para_entrar, 2)}, "
+                 f"hora_entrada={hora_entrada}")
 
         # Profit real
         profit_pct = None
@@ -470,7 +483,7 @@ def senal():
             "hora_entrada":         hora_entrada,
             "hora_salida":          hora_salida,
             "hora_verificar":       hora_verificar,
-            "segundos_para_entrar": seg_restantes,
+            "segundos_para_entrar": seg_restantes,  # ← ESTE ES EL "NEXT VELA"
             "entrada_exacta":       es_inicio_exacto,
             "mensaje_entrada":      f"Entrar a las {hora_entrada} (hora broker)",
             "timezone":             "UTC-6",
@@ -498,10 +511,11 @@ def senal():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",8080))
     print("="*60)
-    print("  IQ Option Bot API  v7.3")
+    print("  IQ Option Bot API  v7.4")
     print(f"  http://0.0.0.0:{port}")
     print(f"  📊 Intervalo de velas: {INTERVALO_FIJO}s")
     print("  🎯 Entrada SIEMPRE en 00:00 o 00:01 (inicio de vela)")
     print("  🕐 Zona horaria del BROKER: UTC-6")
+    print("  ⏱️  NEXT VELA calculado correctamente")
     print("="*60)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
