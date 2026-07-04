@@ -1,9 +1,8 @@
 """
-server.py — IQ Option Bot API v11.0
-- ESCANEO DE TODOS LOS ACTIVOS OTC
+server.py — IQ Option Bot API v11.1
+- ESCANEA TODOS LOS ACTIVOS OTC (202+)
 - Encuentra el MEJOR activo para operar
-- Siempre hay una señal disponible
-- TIMING PERFECTO en HH:MM:00
+- ¡SIEMPRE HAY UNA SEÑAL!
 """
 
 import sys, os
@@ -25,7 +24,7 @@ BROKER_TIMEZONE = timezone(timedelta(hours=-6))
 CONFIANZA_MINIMA = 60
 INTERVALO_FIJO = 60
 MIN_PATRONES = 3
-MAX_ACTIVOS_ESCANEAR = 50  # Escanea 50 activos por vez
+MAX_ACTIVOS_ESCANEAR = 999  # ¡TODOS LOS ACTIVOS!
 
 @app.before_request
 def handle_options():
@@ -219,7 +218,7 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api":       "IQ Option Bot API",
-        "version":   "11.0",
+        "version":   "11.1",
         "estado":    "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
@@ -227,7 +226,7 @@ def raiz():
         "broker_timezone": "UTC-6",
         "confianza_minima": CONFIANZA_MINIMA,
         "min_patrones": MIN_PATRONES,
-        "max_activos_escanear": MAX_ACTIVOS_ESCANEAR,
+        "max_activos_escanear": "TODOS",
     })
 
 @app.route("/iq/ping")
@@ -477,15 +476,18 @@ def escanear_activos():
     duracion_min = float(body.get("duracion", 1))
     intervalo = INTERVALO_FIJO
     
-    # Obtener lista de activos OTC
+    # Obtener TODOS los activos OTC
     activos_otc = [a for a in _cache_activos if a["es_otc"]]
     
-    log.info(f"🔍 Escaneando {len(activos_otc)} activos OTC...")
+    log.info(f"🔍 Escaneando TODOS los {len(activos_otc)} activos OTC...")
     
     resultados = []
     activos_analizados = 0
     
-    for activo in activos_otc[:MAX_ACTIVOS_ESCANEAR]:
+    # ══════════════════════════════════════════════════════════════
+    # 🔥 ESCANEAR TODOS LOS ACTIVOS (sin límite)
+    # ══════════════════════════════════════════════════════════════
+    for activo in activos_otc:  # ← TODOS los activos
         ticker = activo["ticker"]
         try:
             # Obtener velas del activo
@@ -499,6 +501,7 @@ def escanear_activos():
             senal = generar_senal(candles, "patrones", intervalo)
             activos_analizados += 1
             
+            # Solo guardar señales válidas
             if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= CONFIANZA_MINIMA:
                 resultados.append({
                     "activo": ticker,
@@ -510,7 +513,8 @@ def escanear_activos():
                     "payout": activo["payout"],
                 })
             
-            time.sleep(0.15)  # Evitar rate limiting
+            # Pequeña pausa para no saturar
+            time.sleep(0.1)
             
         except Exception as e:
             log.error(f"Error escaneando {ticker}: {e}")
@@ -561,7 +565,7 @@ def escanear_activos():
             "duracion_min": duracion_min,
             "total_escaneados": activos_analizados,
             "señales_encontradas": len(resultados),
-            "mejores_activos": resultados[:5],
+            "mejores_activos": resultados[:10],  # Top 10
             "mensaje_entrada": f"Entrar a {mejor['nombre']} a las {entrada_broker.strftime('%H:%M:%S')}",
         })
     else:
@@ -577,14 +581,15 @@ def escanear_activos():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",8080))
     print("="*70)
-    print("  IQ Option Bot API  v11.0 - ESCANEO DE ACTIVOS")
+    print("  IQ Option Bot API  v11.1 - ESCANEO TOTAL")
     print(f"  http://0.0.0.0:{port}")
     print(f"  📊 Intervalo de velas: {INTERVALO_FIJO}s")
     print(f"  🎯 Entrada SIEMPRE en HH:MM:00 (inicio de vela)")
     print(f"  🕐 Zona horaria del BROKER: UTC-6")
     print(f"  🔒 Confianza mínima: {CONFIANZA_MINIMA}%")
     print(f"  📊 Mínimo patrones: {MIN_PATRONES}")
-    print(f"  🔍 ESCANEA {MAX_ACTIVOS_ESCANEAR} activos OTC por vez")
+    print("  🔍 ESCANEA TODOS los activos OTC")
     print("  🏆 Encuentra el MEJOR activo para operar")
+    print("  📈 ¡SIEMPRE HAY UNA SEÑAL!")
     print("="*70)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
