@@ -1,9 +1,9 @@
 """
-server.py — IQ Option Bot API v7.1
+server.py — IQ Option Bot API v7.2
 - Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD de Railway
 - Cache de activos (respuesta instantánea)
 - Velas en tiempo real (Blitz) - FORZADO A 60 SEGUNDOS
-- Señales con hora de entrada
+- ENTRADA SIEMPRE EN 00:00 o 00:01 (inicio exacto de vela)
 """
 
 import sys, os
@@ -57,7 +57,7 @@ _cache_activos    = []
 _cache_activos_ts = 0
 
 # ── FORZAR INTERVALO A 60 SEGUNDOS ──────────────────────────────
-INTERVALO_FIJO = 60  # Cambia este valor para usar otro intervalo
+INTERVALO_FIJO = 60
 
 # ════════════════════════════════════════════════════════════════
 #  HELPERS
@@ -172,7 +172,6 @@ def _precargar_activos():
                 continue
             api = sesion["api"]
 
-            # Usar solo get_all_profit — más rápido que get_all_init
             profits = {}
             try:
                 profits = api.get_all_profit() or {}
@@ -180,14 +179,12 @@ def _precargar_activos():
                 pass
 
             resultado = []
-            # Construir lista desde profits directamente
             for activo, info in profits.items():
                 if not info:
                     continue
                 payout = round((info.get("turbo", 0) or 0) * 100, 1)
                 if payout <= 0:
                     continue
-                # Solo activos con payout real minimo 80%
                 if payout < 80:
                     continue
                 resultado.append({
@@ -219,7 +216,7 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api":       "IQ Option Bot API",
-        "version":   "7.1",
+        "version":   "7.2",
         "estado":    "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
@@ -291,7 +288,6 @@ def activos_blitz():
             "activos": _cache_activos,
             "cached":  True,
         })
-    # Cache vacío — cargar ahora (solo ocurre los primeros 20s)
     try:
         api = sesion["api"]
         open_time_res=[None]; profits_res=[None]
@@ -324,19 +320,11 @@ def activos_blitz():
 @app.route("/iq/velas/live")
 @requiere_conexion
 def velas_live():
-    """
-    Devuelve velas en tiempo real.
-    FORZADO a intervalo fijo de 60 segundos.
-    El parámetro 'intervalo' del frontend es IGNORADO.
-    """
     api       = sesion["api"]
     activo    = normalizar_activo(request.args.get("activo","EURUSD-OTC"))
-    # IGNORAR el intervalo que envía el frontend - FORZAR 60 SEGUNDOS
     intervalo = INTERVALO_FIJO
     cantidad  = int(request.args.get("cantidad",60))
     clave     = f"{activo}_{intervalo}"
-    
-    log.info(f"📊 Velas {activo} - intervalo FORZADO a {intervalo}s (frontend solicitó {request.args.get('intervalo', 'N/A')})")
     
     try:
         with streams_lock:
@@ -370,7 +358,6 @@ def velas_live():
             "intervalo":intervalo,"precio":precio_actual,"tendencia":tendencia,
             "vela_cierra_en":intervalo-(ahora%intervalo),
             "server_time":ahora,"velas":velas_fmt,
-            "nota": f"Intervalo FORZADO a {intervalo}s (ignorando solicitud del frontend)"
         })
     except Exception as e:
         return jsonify({"error":str(e)}), 500
@@ -380,7 +367,7 @@ def velas_live():
 def velas_stop():
     api=sesion["api"]
     activo=normalizar_activo(request.args.get("activo","EURUSD-OTC"))
-    intervalo=INTERVALO_FIJO  # Usar el intervalo fijo
+    intervalo=INTERVALO_FIJO
     clave=f"{activo}_{intervalo}"
     try:
         with streams_lock:
@@ -395,11 +382,10 @@ def velas_stop():
 @requiere_conexion
 def senal():
     """
-    LÓGICA DE TIMING PERFECTA:
-    1. Analiza la vela ACTUAL
-    2. La entrada es al INICIO de la PRÓXIMA vela
-    3. A la MITAD de la operación ya debes estar ganando
-    4. Al FINAL cobras la ganancia
+    LÓGICA DE TIMING:
+    - La entrada SIEMPRE es al inicio de la vela (00:00 o 00:01)
+    - No importa cuándo presiones el botón
+    - Usa la PRÓXIMA vela para entrar
     """
     api  = sesion["api"]
     body = request.get_json(force=True)
@@ -419,30 +405,48 @@ def senal():
         candles   = [raw_a_vela(c) for c in raw]
         resultado = generar_senal(candles, "auto", intervalo)
 
-        # ── TIMING PERFECTO ─────────────────────────────────────
+        # ── TIMING: ENTRADA SIEMPRE EN 00:00 o 00:01 ────────────
         ahora_ts = time.time()
+        
+        # Calcular segundos para el próximo inicio exacto de vela
+        seg_en_vela = ahora_ts % intervalo
+        
+        if seg_en_vela == 0:
+            # Estamos exactamente en el inicio de vela
+            seg_para_entrar = 0
+            ts_entrada = ahora_ts
+        else:
+            # Esperar al próximo inicio de vela
+            seg_para_entrar = intervalo - seg_en_vela
+            ts_entrada = ahora_ts + seg_para_entrar
+        
+        # Si falta menos de 1 segundo, entrar en la siguiente
+        if seg_para_entrar < 1:
+            seg_para_entrar += intervalo
+            ts_entrada = ahora_ts + seg_para_entrar
 
-        # Segundos que faltan para que cierre la vela ACTUAL
-        seg_en_vela   = ahora_ts % intervalo
-        seg_para_cierre = intervalo - seg_en_vela
+        # Calcular salida (duración desde la entrada)
+        duracion_seg = duracion_min * 60
+        ts_salida = ts_entrada + duracion_seg
+        ts_verificar = ts_entrada + (duracion_seg / 2)
 
-        # Si queda menos de 3s → esperar la siguiente vela
-        if seg_para_cierre < 3:
-            seg_para_cierre += intervalo
+        # Formatear horas
+        hora_actual = datetime.fromtimestamp(ahora_ts, tz=timezone.utc).strftime("%H:%M:%S")
+        hora_entrada = datetime.fromtimestamp(ts_entrada, tz=timezone.utc).strftime("%H:%M:%S")
+        hora_salida = datetime.fromtimestamp(ts_salida, tz=timezone.utc).strftime("%H:%M:%S")
+        hora_verificar = datetime.fromtimestamp(ts_verificar, tz=timezone.utc).strftime("%H:%M:%S")
 
-        # La entrada es exactamente cuando cierra la vela actual
-        ts_entrada  = ahora_ts + seg_para_cierre
-        ts_salida   = ts_entrada + (duracion_min * 60)
-        ts_verificar = ts_entrada + ((duracion_min * 60) / 2)
+        # Segundos restantes para la entrada
+        seg_restantes = max(0, round(ts_entrada - ahora_ts, 1))
 
-        hora_entrada   = datetime.fromtimestamp(ts_entrada,  tz=timezone.utc).strftime("%H:%M:%S")
-        hora_salida    = datetime.fromtimestamp(ts_salida,   tz=timezone.utc).strftime("%H:%M:%S")
-        hora_verificar = datetime.fromtimestamp(ts_verificar,tz=timezone.utc).strftime("%H:%M:%S")
+        # Verificar si la entrada es en el minuto exacto (00:00)
+        ts_entrada_dt = datetime.fromtimestamp(ts_entrada, tz=timezone.utc)
+        es_inicio_exacto = ts_entrada_dt.second == 0 or ts_entrada_dt.second == 1
 
         # Profit real
         profit_pct = None
         try:
-            profits    = api.get_all_profit()
+            profits = api.get_all_profit()
             profit_pct = profits.get(activo, {}).get("turbo")
         except:
             pass
@@ -453,31 +457,31 @@ def senal():
             "nombre":               _nombre_legible(activo),
             "es_otc":               "OTC" in activo,
             "senal":                resultado["direccion"],
+            "confianza":            resultado.get("confianza", 0),
 
-            # TIMING PERFECTO
-            "segundos_para_entrar": round(seg_para_cierre, 1),
+            # ── TIMING: ENTRADA EN 00:00 ──────────────────────
+            "hora_actual":          hora_actual,
             "hora_entrada":         hora_entrada,
             "hora_salida":          hora_salida,
             "hora_verificar":       hora_verificar,
-            "mensaje_entrada":      f"Entrar a las {hora_entrada}",
+            "segundos_para_entrar": seg_restantes,
+            "entrada_exacta":       es_inicio_exacto,
+            "mensaje_entrada":      f"Entrar a las {hora_entrada} (inicio de vela)",
 
             # INFO OPERACIÓN
-            "duracion_seg":         int(duracion_min * 60),
+            "duracion_seg":         int(duracion_seg),
             "duracion_min":         duracion_min,
             "intervalo_vela":       intervalo,
-            "proxima_vela_en":      round(seg_para_cierre, 1),
 
             # ANÁLISIS
             "rentabilidad":         f"{round(profit_pct*100,1)}%" if profit_pct else "N/D",
             "volatilidad":          resultado.get("volatilidad", "media"),
             "tendencia":            resultado.get("tendencia", "LATERAL"),
-            "confianza":            resultado.get("confianza", 0),
             "votos_buy":            resultado.get("votos_buy", 0),
             "votos_sell":           resultado.get("votos_sell", 0),
             "razones":              resultado.get("razones", []),
             "indicadores":          resultado.get("indicadores", {}),
             "timing":               resultado.get("timing", {}),
-            "nota_intervalo":       f"Intervalo FORZADO a {intervalo}s",
         })
 
     except Exception as e:
@@ -487,8 +491,9 @@ def senal():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",8080))
     print("="*60)
-    print("  IQ Option Bot API  v7.1")
+    print("  IQ Option Bot API  v7.2")
     print(f"  http://0.0.0.0:{port}")
-    print(f"  📊 Intervalo de velas FORZADO a {INTERVALO_FIJO} segundos")
+    print(f"  📊 Intervalo de velas: {INTERVALO_FIJO}s")
+    print("  🎯 Entrada SIEMPRE en 00:00 o 00:01 (inicio de vela)")
     print("="*60)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
