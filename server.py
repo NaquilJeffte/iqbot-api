@@ -1,11 +1,12 @@
 """
-server.py — IQ Option Bot API v10.0
+server.py — IQ Option Bot API v10.2
 - BUSCADOR DE PATRONES REPETITIVOS
-- Análisis de 5 velas en todo el historial
+- Análisis de 5 velas en TODO el historial (hasta 5000 velas)
 - Predicción basada en DATOS REALES
 - TIMING PERFECTO en HH:MM:00
 - Zona horaria del BROKER (UTC-6)
 - Confianza mínima 70% para operar
+- Mínimo 5 repeticiones del patrón
 """
 
 import sys, os
@@ -27,6 +28,7 @@ BROKER_TIMEZONE = timezone(timedelta(hours=-6))
 CONFIANZA_MINIMA = 70  # Mínimo 70% de acierto en el patrón
 INTERVALO_FIJO = 60     # Velas de 1 minuto
 MIN_PATRONES = 5        # Mínimo 5 repeticiones del patrón
+MAX_VELAS = 5000        # Máximo de velas a analizar (~3.5 días)
 
 @app.before_request
 def handle_options():
@@ -220,7 +222,7 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api":       "IQ Option Bot API",
-        "version":   "10.0",
+        "version":   "10.2",
         "estado":    "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
@@ -228,6 +230,7 @@ def raiz():
         "broker_timezone": "UTC-6",
         "confianza_minima": CONFIANZA_MINIMA,
         "min_patrones": MIN_PATRONES,
+        "max_velas": MAX_VELAS,
     })
 
 @app.route("/iq/ping")
@@ -241,6 +244,7 @@ def ping():
         "intervalo_fijo":   INTERVALO_FIJO,
         "broker_timezone":  "UTC-6",
         "confianza_minima": CONFIANZA_MINIMA,
+        "max_velas":        MAX_VELAS,
         "timestamp":        int(time.time()),
     })
 
@@ -391,34 +395,40 @@ def velas_stop():
 @requiere_conexion
 def senal():
     """
-    SISTEMA v10.0 — BUSCADOR DE PATRONES REPETITIVOS
+    SISTEMA v10.2 — BUSCADOR DE PATRONES CON MÁS DATOS
+    - Analiza HASTA 5000 velas (~3.5 días)
     - Busca el MISMO patrón en TODO el historial
     - Calcula porcentaje de acierto basado en DATOS REALES
-    - SOLO señales con confianza ≥ 70%
+    - SOLO señales con confianza ≥ 70% y ≥ 5 repeticiones
     - TIMING PERFECTO en HH:MM:00
     """
-    api  = sesion["api"]
+    api = sesion["api"]
     body = request.get_json(force=True)
 
-    activo       = normalizar_activo(body.get("activo", "EURUSD-OTC"))
+    activo = normalizar_activo(body.get("activo", "EURUSD-OTC"))
     duracion_min = float(body.get("duracion", 1))
-    cantidad     = int(body.get("cantidad_velas", 150))
-
     intervalo = INTERVALO_FIJO
 
     try:
-        raw = api.get_candles(activo, intervalo, cantidad, time.time())
+        # ── OBTENER TODAS LAS VELAS DISPONIBLES ────────────────
+        # Mínimo 500 velas, máximo MAX_VELAS (5000)
+        cantidad_velas = MAX_VELAS
+        log.info(f"🔍 Obteniendo hasta {cantidad_velas} velas para {activo}...")
+        
+        raw = api.get_candles(activo, intervalo, cantidad_velas, time.time())
         if not raw:
             return jsonify({"error": f"Sin velas para {activo}"}), 404
 
         candles = [raw_a_vela(c) for c in raw]
-        resultado = generar_senal(candles, "patrones", intervalo)
+        log.info(f"✅ {len(candles)} velas obtenidas para análisis")
 
+        # ── GENERAR SEÑAL CON MÁS DATOS ──────────────────────
+        resultado = generar_senal(candles, "patrones", intervalo)
+        
         # ── FILTRO DE CONFIANZA ──────────────────────────────────
         confianza = resultado.get("confianza", 0)
         patrones_encontrados = resultado.get("patrones_encontrados", 0)
         
-        # SOLO aceptar si cumple los requisitos
         es_valida = (
             resultado["direccion"] in ("BUY", "SELL") and
             confianza >= CONFIANZA_MINIMA and
@@ -426,12 +436,13 @@ def senal():
         )
 
         if not es_valida:
-            log.info(f"🔒 Señal RECHAZADA: {resultado['direccion']} | Confianza: {confianza}% | Patrones: {patrones_encontrados}")
+            log.info(f"🔒 Señal RECHAZADA: {resultado['direccion']} | Confianza: {confianza}% | Patrones: {patrones_encontrados} | Velas: {len(candles)}")
             resultado["direccion"] = "ESPERAR"
             resultado["confianza"] = 0
             resultado["razones"] = [
                 f"Patrón encontrado {patrones_encontrados} veces (mínimo {MIN_PATRONES})",
                 f"Confianza: {confianza}% (mínimo {CONFIANZA_MINIMA}%)",
+                f"Analizadas {len(candles)} velas",
                 "Esperar mejor oportunidad"
             ]
 
@@ -464,7 +475,6 @@ def senal():
         hora_verificar = verificar_broker.strftime("%H:%M:%S")
         seg_restantes = max(0, round(seg_para_entrar, 1))
 
-        # ── INFO ADICIONAL ──────────────────────────────────────
         es_senal_valida = resultado["direccion"] in ("BUY", "SELL") and es_valida
 
         # Profit real
@@ -498,6 +508,8 @@ def senal():
             "patrones_encontrados": patrones_encontrados,
             "pct_acierto": resultado.get("pct_acierto", 0),
             "cambio_promedio": resultado.get("cambio_promedio", 0),
+            "total_velas_analizadas": len(candles),
+            "min_patrones": MIN_PATRONES,
 
             # ── RAZONES Y ANÁLISIS ──────────────────────────────
             "razones": resultado.get("razones", []),
@@ -523,13 +535,14 @@ def senal():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",8080))
     print("="*70)
-    print("  IQ Option Bot API  v10.0 - BUSCADOR DE PATRONES")
+    print("  IQ Option Bot API  v10.2 - BUSCADOR DE PATRONES")
     print(f"  http://0.0.0.0:{port}")
     print(f"  📊 Intervalo de velas: {INTERVALO_FIJO}s")
     print(f"  🎯 Entrada SIEMPRE en HH:MM:00 (inicio de vela)")
     print(f"  🕐 Zona horaria del BROKER: UTC-6")
     print(f"  🔒 Confianza mínima: {CONFIANZA_MINIMA}%")
     print(f"  📊 Mínimo patrones: {MIN_PATRONES}")
-    print("  🔍 Busca patrones REPETITIVOS en todo el historial")
+    print(f"  📈 Máximo velas analizadas: {MAX_VELAS} (~3.5 días)")
+    print("  🔍 Busca patrones REPETITIVOS en TODO el historial")
     print("="*70)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
