@@ -3,8 +3,7 @@ server.py — IQ Option Bot API v7.3
 - Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD de Railway/Render
 - Cache de activos (respuesta instantánea)
 - Velas en tiempo real (Blitz) - FORZADO A 60 SEGUNDOS
-- ENTRADA SIEMPRE EN 00:00 o 00:01 (inicio exacto de vela)
-- TIMESTAMP UNIX para que el frontend convierta a hora LOCAL
+- ENTRADA SIEMPRE en hora del BROKER (UTC-6)
 """
 
 import sys, os
@@ -13,13 +12,17 @@ sys.path.insert(0, os.path.dirname(__file__))
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import time, logging, threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from analysis import generar_senal, detectar_volatilidad, seleccionar_estrategia_auto
 
 app = Flask(__name__)
 CORS(app, origins="*", allow_headers=["Content-Type","Accept","Authorization","X-API-Key"],
      methods=["GET","POST","OPTIONS"])
+
+# ── ZONA HORARIA DEL BROKER (IQ Option) ─────────────────────────
+# IQ Option usa UTC-6 (México/Centro América)
+BROKER_TIMEZONE = timezone(timedelta(hours=-6))
 
 @app.before_request
 def handle_options():
@@ -110,6 +113,10 @@ def raw_a_vela(c):
         "close":     round(float(c["close"]), 6),
         "volume":    c.get("volume", 0),
     }
+
+def hora_broker(timestamp):
+    """Convierte un timestamp a hora del broker (UTC-6)"""
+    return datetime.fromtimestamp(timestamp, tz=BROKER_TIMEZONE)
 
 # ════════════════════════════════════════════════════════════════
 #  AUTO-CONNECT AL ARRANCAR
@@ -222,6 +229,7 @@ def raiz():
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
+        "broker_timezone": "UTC-6",
     })
 
 @app.route("/iq/ping")
@@ -233,6 +241,7 @@ def ping():
         "cuenta":           sesion["cuenta"],
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo":   INTERVALO_FIJO,
+        "broker_timezone":  "UTC-6",
         "timestamp":        int(time.time()),
     })
 
@@ -385,9 +394,7 @@ def senal():
     """
     LÓGICA DE TIMING:
     - La entrada SIEMPRE es al inicio de la vela (00:00 o 00:01)
-    - No importa cuándo presiones el botón
-    - Usa la PRÓXIMA vela para entrar
-    - DEVUELVE TIMESTAMP UNIX para que el frontend convierta a hora LOCAL
+    - HORA del BROKER (UTC-6) - misma que muestra IQ Option
     """
     api  = sesion["api"]
     body = request.get_json(force=True)
@@ -396,7 +403,6 @@ def senal():
     duracion_min = float(body.get("duracion", 1))
     cantidad     = int(body.get("cantidad_velas", 150))
 
-    # INTERVALO FIJO DE 60 SEGUNDOS
     intervalo = INTERVALO_FIJO
 
     try:
@@ -407,40 +413,41 @@ def senal():
         candles   = [raw_a_vela(c) for c in raw]
         resultado = generar_senal(candles, "auto", intervalo)
 
-        # ── TIMING: ENTRADA SIEMPRE EN 00:00 o 00:01 ────────────
+        # ── TIMING: ENTRADA EN HORA DEL BROKER ──────────────────
         ahora_ts = time.time()
         
-        # Calcular segundos para el próximo inicio exacto de vela
-        seg_en_vela = ahora_ts % intervalo
+        # Obtener hora actual del broker (UTC-6)
+        ahora_broker = hora_broker(ahora_ts)
+        seg_en_vela = ahora_broker.second  # Segundos dentro del minuto
         
         if seg_en_vela == 0:
-            # Estamos exactamente en el inicio de vela
             seg_para_entrar = 0
             ts_entrada = ahora_ts
         else:
-            # Esperar al próximo inicio de vela
-            seg_para_entrar = intervalo - seg_en_vela
+            seg_para_entrar = 60 - seg_en_vela  # Siempre 60 segundos por minuto
             ts_entrada = ahora_ts + seg_para_entrar
         
-        # Si falta menos de 1 segundo, entrar en la siguiente
         if seg_para_entrar < 1:
-            seg_para_entrar += intervalo
+            seg_para_entrar += 60
             ts_entrada = ahora_ts + seg_para_entrar
 
-        # Calcular salida (duración desde la entrada)
         duracion_seg = duracion_min * 60
         ts_salida = ts_entrada + duracion_seg
         ts_verificar = ts_entrada + (duracion_seg / 2)
 
-        # Segundos restantes para la entrada
+        # ── FORMATO HORA DEL BROKER (UTC-6) ─────────────────────
+        entrada_broker = hora_broker(ts_entrada)
+        salida_broker = hora_broker(ts_salida)
+        actual_broker = hora_broker(ahora_ts)
+        verificar_broker = hora_broker(ts_verificar)
+
+        hora_actual = actual_broker.strftime("%H:%M:%S")
+        hora_entrada = entrada_broker.strftime("%H:%M:%S")
+        hora_salida = salida_broker.strftime("%H:%M:%S")
+        hora_verificar = verificar_broker.strftime("%H:%M:%S")
+
         seg_restantes = max(0, round(ts_entrada - ahora_ts, 1))
-
-        # Verificar si la entrada es en el minuto exacto (00:00)
-        ts_entrada_dt = datetime.fromtimestamp(ts_entrada, tz=timezone.utc)
-        es_inicio_exacto = ts_entrada_dt.second == 0 or ts_entrada_dt.second == 1
-
-        # ── TIMESTAMP (para que el frontend convierta a hora local) ──
-        # El frontend hará: new Date(timestamp * 1000).toLocaleTimeString()
+        es_inicio_exacto = entrada_broker.second == 0 or entrada_broker.second == 1
 
         # Profit real
         profit_pct = None
@@ -458,14 +465,15 @@ def senal():
             "senal":                resultado["direccion"],
             "confianza":            resultado.get("confianza", 0),
 
-            # ── TIMESTAMP UNIX (el frontend convierte a hora local) ──
-            "timestamp_actual":     ahora_ts,
-            "timestamp_entrada":    ts_entrada,
-            "timestamp_salida":     ts_salida,
-            "timestamp_verificar":  ts_verificar,
+            # ── TIMING: HORA DEL BROKER (UTC-6) ─────────────────
+            "hora_actual":          hora_actual,
+            "hora_entrada":         hora_entrada,
+            "hora_salida":          hora_salida,
+            "hora_verificar":       hora_verificar,
             "segundos_para_entrar": seg_restantes,
             "entrada_exacta":       es_inicio_exacto,
-            "mensaje_entrada":      f"Entrar en {seg_restantes}s (inicio de vela)",
+            "mensaje_entrada":      f"Entrar a las {hora_entrada} (hora broker)",
+            "timezone":             "UTC-6",
 
             # INFO OPERACIÓN
             "duracion_seg":         int(duracion_seg),
@@ -494,6 +502,6 @@ if __name__ == "__main__":
     print(f"  http://0.0.0.0:{port}")
     print(f"  📊 Intervalo de velas: {INTERVALO_FIJO}s")
     print("  🎯 Entrada SIEMPRE en 00:00 o 00:01 (inicio de vela)")
-    print("  📱 Timestamp UNIX → frontend convierte a hora LOCAL")
+    print("  🕐 Zona horaria del BROKER: UTC-6")
     print("="*60)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
