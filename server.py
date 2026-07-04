@@ -1,9 +1,10 @@
 """
-server.py — IQ Option Bot API v7.2
-- Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD de Railway
+server.py — IQ Option Bot API v7.3
+- Auto-conexión al arrancar usando IQ_EMAIL + IQ_PASSWORD de Railway/Render
 - Cache de activos (respuesta instantánea)
 - Velas en tiempo real (Blitz) - FORZADO A 60 SEGUNDOS
 - ENTRADA SIEMPRE EN 00:00 o 00:01 (inicio exacto de vela)
+- TIMESTAMP UNIX para que el frontend convierta a hora LOCAL
 """
 
 import sys, os
@@ -83,7 +84,7 @@ def requiere_conexion(f):
         if not sesion["conectado"] or sesion["api"] is None:
             return jsonify({
                 "error": "No hay sesión activa",
-                "hint":  "Agrega IQ_EMAIL e IQ_PASSWORD en Railway"
+                "hint":  "Agrega IQ_EMAIL e IQ_PASSWORD en las variables de entorno"
             }), 403
         return f(*args, **kwargs)
     return wrapper
@@ -216,7 +217,7 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api":       "IQ Option Bot API",
-        "version":   "7.2",
+        "version":   "7.3",
         "estado":    "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
@@ -386,6 +387,7 @@ def senal():
     - La entrada SIEMPRE es al inicio de la vela (00:00 o 00:01)
     - No importa cuándo presiones el botón
     - Usa la PRÓXIMA vela para entrar
+    - DEVUELVE TIMESTAMP UNIX para que el frontend convierta a hora LOCAL
     """
     api  = sesion["api"]
     body = request.get_json(force=True)
@@ -430,18 +432,15 @@ def senal():
         ts_salida = ts_entrada + duracion_seg
         ts_verificar = ts_entrada + (duracion_seg / 2)
 
-        # Formatear horas
-        hora_actual = datetime.fromtimestamp(ahora_ts, tz=timezone.utc).strftime("%H:%M:%S")
-        hora_entrada = datetime.fromtimestamp(ts_entrada, tz=timezone.utc).strftime("%H:%M:%S")
-        hora_salida = datetime.fromtimestamp(ts_salida, tz=timezone.utc).strftime("%H:%M:%S")
-        hora_verificar = datetime.fromtimestamp(ts_verificar, tz=timezone.utc).strftime("%H:%M:%S")
-
         # Segundos restantes para la entrada
         seg_restantes = max(0, round(ts_entrada - ahora_ts, 1))
 
         # Verificar si la entrada es en el minuto exacto (00:00)
         ts_entrada_dt = datetime.fromtimestamp(ts_entrada, tz=timezone.utc)
         es_inicio_exacto = ts_entrada_dt.second == 0 or ts_entrada_dt.second == 1
+
+        # ── TIMESTAMP (para que el frontend convierta a hora local) ──
+        # El frontend hará: new Date(timestamp * 1000).toLocaleTimeString()
 
         # Profit real
         profit_pct = None
@@ -459,14 +458,14 @@ def senal():
             "senal":                resultado["direccion"],
             "confianza":            resultado.get("confianza", 0),
 
-            # ── TIMING: ENTRADA EN 00:00 ──────────────────────
-            "hora_actual":          hora_actual,
-            "hora_entrada":         hora_entrada,
-            "hora_salida":          hora_salida,
-            "hora_verificar":       hora_verificar,
+            # ── TIMESTAMP UNIX (el frontend convierte a hora local) ──
+            "timestamp_actual":     ahora_ts,
+            "timestamp_entrada":    ts_entrada,
+            "timestamp_salida":     ts_salida,
+            "timestamp_verificar":  ts_verificar,
             "segundos_para_entrar": seg_restantes,
             "entrada_exacta":       es_inicio_exacto,
-            "mensaje_entrada":      f"Entrar a las {hora_entrada} (inicio de vela)",
+            "mensaje_entrada":      f"Entrar en {seg_restantes}s (inicio de vela)",
 
             # INFO OPERACIÓN
             "duracion_seg":         int(duracion_seg),
@@ -491,9 +490,10 @@ def senal():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",8080))
     print("="*60)
-    print("  IQ Option Bot API  v7.2")
+    print("  IQ Option Bot API  v7.3")
     print(f"  http://0.0.0.0:{port}")
     print(f"  📊 Intervalo de velas: {INTERVALO_FIJO}s")
     print("  🎯 Entrada SIEMPRE en 00:00 o 00:01 (inicio de vela)")
+    print("  📱 Timestamp UNIX → frontend convierte a hora LOCAL")
     print("="*60)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
