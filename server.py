@@ -1,9 +1,11 @@
 """
-server.py — IQ Option Bot API v8.0
-- CONFIANZA EXTREMA 90-95%
+server.py — IQ Option Bot API v10.0
+- BUSCADOR DE PATRONES REPETITIVOS
+- Análisis de 5 velas en todo el historial
+- Predicción basada en DATOS REALES
 - TIMING PERFECTO en HH:MM:00
-- SOLO señales con confirmación múltiple
-- Gestión de riesgo automática
+- Zona horaria del BROKER (UTC-6)
+- Confianza mínima 70% para operar
 """
 
 import sys, os
@@ -14,18 +16,17 @@ from flask_cors import CORS
 import time, logging, threading
 from datetime import datetime, timezone, timedelta
 
-from analysis import generar_senal, detectar_volatilidad, seleccionar_estrategia_auto
+from analysis import generar_senal
 
 app = Flask(__name__)
 CORS(app, origins="*", allow_headers=["Content-Type","Accept","Authorization","X-API-Key"],
      methods=["GET","POST","OPTIONS"])
 
-# ── ZONA HORARIA DEL BROKER (IQ Option) ─────────────────────────
+# ── CONFIGURACIÓN ─────────────────────────────────────────────────
 BROKER_TIMEZONE = timezone(timedelta(hours=-6))
-
-# ── CONFIGURACIÓN DE CONFIANZA EXTREMA ──────────────────────────
-CONFIANZA_MINIMA = 90  # SOLO señales con 90%+ de confianza
+CONFIANZA_MINIMA = 70  # Mínimo 70% de acierto en el patrón
 INTERVALO_FIJO = 60     # Velas de 1 minuto
+MIN_PATRONES = 5        # Mínimo 5 repeticiones del patrón
 
 @app.before_request
 def handle_options():
@@ -58,8 +59,6 @@ sesion = {
 
 streams_activos = {}
 streams_lock    = threading.Lock()
-
-# ── Cache de activos ─────────────────────────────────────────────
 _cache_activos    = []
 _cache_activos_ts = 0
 
@@ -115,11 +114,10 @@ def raw_a_vela(c):
     }
 
 def hora_broker(timestamp):
-    """Convierte un timestamp a hora del broker (UTC-6)"""
     return datetime.fromtimestamp(timestamp, tz=BROKER_TIMEZONE)
 
 # ════════════════════════════════════════════════════════════════
-#  AUTO-CONNECT AL ARRANCAR
+#  AUTO-CONNECT
 # ════════════════════════════════════════════════════════════════
 
 def _auto_connect():
@@ -167,7 +165,7 @@ def _auto_connect():
         log.error(f"Error auto-connect: {e}")
 
 # ════════════════════════════════════════════════════════════════
-#  PRE-CARGA DE ACTIVOS EN BACKGROUND
+#  PRE-CARGA DE ACTIVOS
 # ════════════════════════════════════════════════════════════════
 
 def _precargar_activos():
@@ -191,9 +189,7 @@ def _precargar_activos():
                 if not info:
                     continue
                 payout = round((info.get("turbo", 0) or 0) * 100, 1)
-                if payout <= 0:
-                    continue
-                if payout < 80:  # Solo activos con buen payout
+                if payout <= 0 or payout < 80:
                     continue
                 resultado.append({
                     "ticker":  activo,
@@ -206,7 +202,7 @@ def _precargar_activos():
             resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
             _cache_activos    = resultado
             _cache_activos_ts = time.time()
-            log.info(f"✅ Cache activos: {len(resultado)} activos cargados (payout >= 80%)")
+            log.info(f"✅ Cache activos: {len(resultado)} activos cargados")
 
         except Exception as e:
             log.error(f"Error precargando activos: {e}")
@@ -224,13 +220,14 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api":       "IQ Option Bot API",
-        "version":   "8.0",
+        "version":   "10.0",
         "estado":    "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
         "confianza_minima": CONFIANZA_MINIMA,
+        "min_patrones": MIN_PATRONES,
     })
 
 @app.route("/iq/ping")
@@ -394,10 +391,11 @@ def velas_stop():
 @requiere_conexion
 def senal():
     """
-    SISTEMA DE CONFIANZA EXTREMA 90-95%
-    - SOLO señales con confianza ≥ 90%
+    SISTEMA v10.0 — BUSCADOR DE PATRONES REPETITIVOS
+    - Busca el MISMO patrón en TODO el historial
+    - Calcula porcentaje de acierto basado en DATOS REALES
+    - SOLO señales con confianza ≥ 70%
     - TIMING PERFECTO en HH:MM:00
-    - Filtros de seguridad adicionales
     """
     api  = sesion["api"]
     body = request.get_json(force=True)
@@ -414,29 +412,34 @@ def senal():
             return jsonify({"error": f"Sin velas para {activo}"}), 404
 
         candles = [raw_a_vela(c) for c in raw]
-        resultado = generar_senal(candles, "confianza_extrema", intervalo)
+        resultado = generar_senal(candles, "patrones", intervalo)
 
-        # ── FILTRO DE CONFIANZA EXTREMA ──────────────────────────
+        # ── FILTRO DE CONFIANZA ──────────────────────────────────
         confianza = resultado.get("confianza", 0)
+        patrones_encontrados = resultado.get("patrones_encontrados", 0)
         
-        # SOLO aceptar señales con confianza ≥ 90%
-        if resultado["direccion"] in ("BUY", "SELL") and confianza < CONFIANZA_MINIMA:
-            log.info(f"🔒 Señal RECHAZADA: {resultado['direccion']} con confianza {confianza}% (mínimo {CONFIANZA_MINIMA}%)")
+        # SOLO aceptar si cumple los requisitos
+        es_valida = (
+            resultado["direccion"] in ("BUY", "SELL") and
+            confianza >= CONFIANZA_MINIMA and
+            patrones_encontrados >= MIN_PATRONES
+        )
+
+        if not es_valida:
+            log.info(f"🔒 Señal RECHAZADA: {resultado['direccion']} | Confianza: {confianza}% | Patrones: {patrones_encontrados}")
             resultado["direccion"] = "ESPERAR"
             resultado["confianza"] = 0
             resultado["razones"] = [
-                f"Confianza insuficiente: {confianza}%",
-                f"Se requiere mínimo {CONFIANZA_MINIMA}%",
-                "Esperar señal más fuerte"
+                f"Patrón encontrado {patrones_encontrados} veces (mínimo {MIN_PATRONES})",
+                f"Confianza: {confianza}% (mínimo {CONFIANZA_MINIMA}%)",
+                "Esperar mejor oportunidad"
             ]
 
         # ── TIMING PERFECTO ──────────────────────────────────────
         ahora_ts = time.time()
-        
         ahora_broker = hora_broker(ahora_ts)
         segundos_en_minuto = ahora_broker.second + (ahora_broker.microsecond / 1000000)
         
-        # SIEMPRE al PRÓXIMO minuto exacto
         if segundos_en_minuto == 0:
             seg_para_entrar = 60
         else:
@@ -446,13 +449,10 @@ def senal():
             seg_para_entrar = 60
         
         ts_entrada = ahora_ts + seg_para_entrar
-        
-        # ── CALCULAR SALIDA ──────────────────────────────────────
         duracion_seg = duracion_min * 60
         ts_salida = ts_entrada + duracion_seg
         ts_verificar = ts_entrada + (duracion_seg / 2)
 
-        # ── FORMATO HORA DEL BROKER ─────────────────────────────
         entrada_broker = hora_broker(ts_entrada)
         salida_broker = hora_broker(ts_salida)
         actual_broker = hora_broker(ahora_ts)
@@ -462,11 +462,10 @@ def senal():
         hora_entrada = entrada_broker.strftime("%H:%M:%S")
         hora_salida = salida_broker.strftime("%H:%M:%S")
         hora_verificar = verificar_broker.strftime("%H:%M:%S")
-
         seg_restantes = max(0, round(seg_para_entrar, 1))
 
-        # ── INFO ADICIONAL PARA CONFIANZA EXTREMA ──────────────
-        es_senal_valida = resultado["direccion"] in ("BUY", "SELL") and confianza >= CONFIANZA_MINIMA
+        # ── INFO ADICIONAL ──────────────────────────────────────
+        es_senal_valida = resultado["direccion"] in ("BUY", "SELL") and es_valida
 
         # Profit real
         profit_pct = None
@@ -493,10 +492,12 @@ def senal():
             "mensaje_entrada": f"Entrar a las {hora_entrada} (inicio de vela)",
             "timezone": "UTC-6",
 
-            # ── CONFIRMACIONES DE SEGURIDAD ─────────────────────
+            # ── CONFIRMACIONES ──────────────────────────────────
             "confianza_minima": CONFIANZA_MINIMA,
             "senal_valida": es_senal_valida,
-            "requiere_confirmacion": es_senal_valida,
+            "patrones_encontrados": patrones_encontrados,
+            "pct_acierto": resultado.get("pct_acierto", 0),
+            "cambio_promedio": resultado.get("cambio_promedio", 0),
 
             # ── RAZONES Y ANÁLISIS ──────────────────────────────
             "razones": resultado.get("razones", []),
@@ -506,17 +507,13 @@ def senal():
             "score_sell": resultado.get("score_sell", 0),
             "volatilidad": resultado.get("volatilidad", "media"),
             "tendencia": resultado.get("tendencia", "LATERAL"),
+            "indicadores": resultado.get("indicadores", {}),
 
             # ── INFO OPERACIÓN ──────────────────────────────────
             "duracion_seg": int(duracion_seg),
             "duracion_min": duracion_min,
             "intervalo_vela": intervalo,
             "rentabilidad": f"{round(profit_pct*100,1)}%" if profit_pct else "N/D",
-
-            # ── INDICADORES ──────────────────────────────────────
-            "indicadores": resultado.get("indicadores", {}),
-            "timing": resultado.get("timing", {}),
-            "patrones_velas": resultado.get("patrones_velas", []),
         })
 
     except Exception as e:
@@ -526,12 +523,13 @@ def senal():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",8080))
     print("="*70)
-    print("  IQ Option Bot API  v8.0 - CONFIANZA EXTREMA")
+    print("  IQ Option Bot API  v10.0 - BUSCADOR DE PATRONES")
     print(f"  http://0.0.0.0:{port}")
     print(f"  📊 Intervalo de velas: {INTERVALO_FIJO}s")
     print(f"  🎯 Entrada SIEMPRE en HH:MM:00 (inicio de vela)")
     print(f"  🕐 Zona horaria del BROKER: UTC-6")
-    print(f"  🔒 Confianza mínima requerida: {CONFIANZA_MINIMA}%")
-    print("  📈 SOLO señales con 90%+ de probabilidad de éxito")
+    print(f"  🔒 Confianza mínima: {CONFIANZA_MINIMA}%")
+    print(f"  📊 Mínimo patrones: {MIN_PATRONES}")
+    print("  🔍 Busca patrones REPETITIVOS en todo el historial")
     print("="*70)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
