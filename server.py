@@ -1,14 +1,11 @@
 """
-server.py — IQ Option Bot API v13.3
-- BÚSQUEDA DE PATRONES CON SALTO DE VELA
-- PATCH para error get_digital_underlying_list_data
-- FORZADO a 60 segundos en velas live
-- Analiza 5 velas CERRADAS, SALTA la actual, predice la PRÓXIMA
-- Escanea TODOS los activos OTC
-- Timing PERFECTO en HH:MM:00
-- Zona horaria del BROKER (UTC-6)
-- Confianza mínima 60%
-- OPTIMIZADO: 15,000 velas históricas
+server.py — IQ Option Bot API v14.0
+- 30 ESTRATEGIAS + ESCANEO AUTOMÁTICO
+- 10 ACTIVOS OBLIGATORIOS SIEMPRE VISIBLES
+- SEÑAL CADA MINUTO AUTOMÁTICA
+- SIN TIMEOUT EN RENDER
+- 500 VELAS (RÁPIDO Y SUFICIENTE)
+- PATCH PARA ERROR get_digital_underlying_list_data
 """
 
 import sys, os
@@ -20,18 +17,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import iqoptionapi.stable_api as stable_api
 
-# Guardar la función original
 _original_get_digital_open = stable_api.IQ_Option.__get_digital_open
 
 def _patched_get_digital_open(self):
-    """Versión parcheada que no falla si la API devuelve None"""
     try:
         return _original_get_digital_open(self)
-    except Exception as e:
-        # Si falla, devolver datos vacíos
+    except Exception:
         return {"underlying": {}}
 
-# Aplicar el parche
 stable_api.IQ_Option.__get_digital_open = _patched_get_digital_open
 
 # ════════════════════════════════════════════════════════════════
@@ -56,6 +49,30 @@ INTERVALO_FIJO = 60
 VELAS_PARA_ANALISIS = 500
 MAX_ACTIVOS_ESCANEAR = 999
 
+# ── 10 ACTIVOS OBLIGATORIOS ────────────────────────────────────
+ACTIVOS_OBLIGATORIOS = [
+    {"ticker": "EURUSD-OTC", "nombre": "EUR/USD (OTC)", "payout": 85, "estrella": "⭐"},
+    {"ticker": "GBPUSD-OTC", "nombre": "GBP/USD (OTC)", "payout": 85, "estrella": "⭐"},
+    {"ticker": "EURGBP-OTC", "nombre": "EUR/GBP (OTC)", "payout": 85, "estrella": "⭐"},
+    {"ticker": "AUDUSD-OTC", "nombre": "AUD/USD (OTC)", "payout": 85, "estrella": "⭐"},
+    {"ticker": "USDJPY-OTC", "nombre": "USD/JPY (OTC)", "payout": 85, "estrella": "⭐"},
+    {"ticker": "USDCHF-OTC", "nombre": "USD/CHF (OTC)", "payout": 85, "estrella": "⭐"},
+    {"ticker": "XAUUSD-OTC", "nombre": "XAU/USD (OTC)", "payout": 85, "estrella": "⭐"},
+    {"ticker": "BTCUSD-OTC", "nombre": "BTC/USD (OTC)", "payout": 85, "estrella": "⭐"},
+    {"ticker": "ETHUSD-OTC", "nombre": "ETH/USD (OTC)", "payout": 85, "estrella": "⭐"},
+    {"ticker": "EURJPY-OTC", "nombre": "EUR/JPY (OTC)", "payout": 85, "estrella": "⭐"},
+]
+
+# ── MAPEO DE DURACIONES ─────────────────────────────────────────
+DURACIONES = [
+    {"label": "30s", "valor": 0.5},
+    {"label": "45s", "valor": 0.75},
+    {"label": "1m", "valor": 1},
+    {"label": "2m", "valor": 2},
+    {"label": "3m", "valor": 3},
+    {"label": "5m", "valor": 5},
+]
+
 @app.before_request
 def handle_options():
     if request.method == "OPTIONS":
@@ -78,11 +95,11 @@ log = logging.getLogger(__name__)
 
 # ── Sesión global ────────────────────────────────────────────────
 sesion = {
-    "api":       None,
-    "email":     None,
+    "api": None,
+    "email": None,
     "conectado": False,
-    "cuenta":    None,
-    "lock":      threading.Lock(),
+    "cuenta": None,
+    "lock": threading.Lock(),
 }
 
 streams_activos = {}
@@ -114,7 +131,7 @@ def requiere_conexion(f):
         if not sesion["conectado"] or sesion["api"] is None:
             return jsonify({
                 "error": "No hay sesión activa",
-                "hint":  "Agrega IQ_EMAIL e IQ_PASSWORD en las variables de entorno"
+                "hint": "Agrega IQ_EMAIL e IQ_PASSWORD en las variables de entorno"
             }), 403
         return f(*args, **kwargs)
     return wrapper
@@ -133,12 +150,12 @@ def normalizar_activo(activo):
 def raw_a_vela(c):
     return {
         "timestamp": c["from"],
-        "datetime":  datetime.fromtimestamp(c["from"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-        "open":      round(float(c["open"]),  6),
-        "high":      round(float(c["max"]),   6),
-        "low":       round(float(c["min"]),   6),
-        "close":     round(float(c["close"]), 6),
-        "volume":    c.get("volume", 0),
+        "datetime": datetime.fromtimestamp(c["from"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "open": round(float(c["open"]), 6),
+        "high": round(float(c["max"]), 6),
+        "low": round(float(c["min"]), 6),
+        "close": round(float(c["close"]), 6),
+        "volume": c.get("volume", 0),
     }
 
 def hora_broker(timestamp):
@@ -213,8 +230,23 @@ def _precargar_activos():
                 pass
 
             resultado = []
+            # Primero agregar los 10 activos obligatorios
+            for activo in ACTIVOS_OBLIGATORIOS:
+                resultado.append({
+                    "ticker": activo["ticker"],
+                    "nombre": activo["nombre"],
+                    "es_otc": True,
+                    "payout": activo["payout"],
+                    "abierto": True,
+                    "obligatorio": True,
+                    "estrella": activo["estrella"],
+                })
+
+            # Luego agregar el resto
             for activo, info in profits.items():
                 if not info:
+                    continue
+                if any(a["ticker"] == activo for a in ACTIVOS_OBLIGATORIOS):
                     continue
                 payout = round((info.get("turbo", 0) or 0) * 100, 1)
                 if payout <= 0 or payout < 80:
@@ -225,6 +257,8 @@ def _precargar_activos():
                     "es_otc": "OTC" in activo.upper(),
                     "payout": payout,
                     "abierto": True,
+                    "obligatorio": False,
+                    "estrella": "",
                 })
 
             resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
@@ -248,15 +282,17 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api": "IQ Option Bot API",
-        "version": "13.3",
+        "version": "14.0",
         "estado": "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
         "confianza_minima": CONFIANZA_MINIMA,
-        "analisis": "patron_con_salto_vela",
-        "max_velas_historicas": 15000,
+        "analisis": "30_estrategias",
+        "max_velas_historicas": 500,
+        "activos_obligatorios": len(ACTIVOS_OBLIGATORIOS),
+        "duraciones": DURACIONES,
     })
 
 @app.route("/iq/ping")
@@ -269,7 +305,7 @@ def ping():
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
-        "version": "13.3",
+        "version": "14.0",
         "timestamp": int(time.time()),
     })
 
@@ -334,37 +370,37 @@ def activos_blitz():
             "total": len(_cache_activos),
             "activos": _cache_activos,
             "cached": True,
+            "activos_obligatorios": len(ACTIVOS_OBLIGATORIOS),
         })
     try:
         api = sesion["api"]
-        open_time_res = [None]
-        profits_res = [None]
-        def _ot(): open_time_res[0] = api.get_all_open_time()
-        def _pr(): profits_res[0] = api.get_all_profit()
-        t1 = threading.Thread(target=_ot, daemon=True)
-        t2 = threading.Thread(target=_pr, daemon=True)
-        t1.start(); t2.start()
-        t1.join(timeout=25); t2.join(timeout=25)
-        open_time = open_time_res[0] or {}
-        profits = profits_res[0] or {}
+        profits = api.get_all_profit() or {}
         resultado = []
-        vistos = set()
-        if "turbo" in open_time:
-            for activo, datos in open_time["turbo"].items():
-                if activo in vistos: continue
-                if not any(info.get("open", False) for _, info in datos.items()): continue
-                vistos.add(activo)
-                profit_info = profits.get(activo, {})
-                payout = round((profit_info.get("turbo", 0) or 0) * 100, 1)
-                if payout < 80:
-                    continue
-                resultado.append({
-                    "ticker": activo,
-                    "nombre": _nombre_legible(activo),
-                    "es_otc": "OTC" in activo.upper(),
-                    "payout": payout,
-                    "abierto": True,
-                })
+        for activo in ACTIVOS_OBLIGATORIOS:
+            resultado.append({
+                "ticker": activo["ticker"],
+                "nombre": activo["nombre"],
+                "es_otc": True,
+                "payout": activo["payout"],
+                "abierto": True,
+                "obligatorio": True,
+                "estrella": activo["estrella"],
+            })
+        for activo, info in profits.items():
+            if any(a["ticker"] == activo for a in ACTIVOS_OBLIGATORIOS):
+                continue
+            payout = round((info.get("turbo", 0) or 0) * 100, 1)
+            if payout < 80:
+                continue
+            resultado.append({
+                "ticker": activo,
+                "nombre": _nombre_legible(activo),
+                "es_otc": "OTC" in activo.upper(),
+                "payout": payout,
+                "abierto": True,
+                "obligatorio": False,
+                "estrella": "",
+            })
         resultado.sort(key=lambda x: (-x["payout"], not x["es_otc"], x["ticker"]))
         _cache_activos = resultado
         return jsonify({
@@ -373,12 +409,13 @@ def activos_blitz():
             "total": len(resultado),
             "activos": resultado,
             "cached": False,
+            "activos_obligatorios": len(ACTIVOS_OBLIGATORIOS),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 # ════════════════════════════════════════════════════════════════
-#  ENDPOINT: VELAS EN TIEMPO REAL (FORZADO A 60s)
+#  ENDPOINT: VELAS EN TIEMPO REAL
 # ════════════════════════════════════════════════════════════════
 
 @app.route("/iq/velas/live")
@@ -386,7 +423,6 @@ def activos_blitz():
 def velas_live():
     api = sesion["api"]
     activo = normalizar_activo(request.args.get("activo", "EURUSD-OTC"))
-    # ✅ FORZAR 60 SEGUNDOS - IGNORAR lo que pide el frontend
     intervalo = INTERVALO_FIJO
     cantidad = int(request.args.get("cantidad", 60))
     clave = f"{activo}_{intervalo}"
@@ -428,7 +464,6 @@ def velas_live():
             "vela_cierra_en": intervalo - (ahora % intervalo),
             "server_time": ahora,
             "velas": velas_fmt,
-            "nota": "Intervalo FORZADO a 60s (ignorando solicitud del frontend)"
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -456,15 +491,7 @@ def velas_stop():
 @app.route("/iq/senal", methods=["POST"])
 @requiere_conexion
 def senal():
-    """
-    SEÑAL PARA UN ACTIVO ESPECÍFICO
-    
-    LÓGICA:
-    1. Toma 5 velas CERRADAS del activo
-    2. Busca el patrón en el historial del MISMO activo (15,000 velas)
-    3. SALTA la vela actual (en movimiento)
-    4. Predice la PRÓXIMA vela (después de la actual)
-    """
+    """Señal para un activo específico con 30 estrategias"""
     api = sesion["api"]
     body = request.get_json(force=True)
 
@@ -482,7 +509,7 @@ def senal():
         resultado = generar_senal(candles, "estructura", intervalo)
 
         confianza = resultado.get("confianza", 0)
-        patrones_encontrados = resultado.get("patrones_encontrados", 0)
+        estrategia_usada = resultado.get("estrategia_usada", "Ninguna")
 
         # ── TIMING PERFECTO ──────────────────────────────────────
         ahora_ts = time.time()
@@ -515,7 +542,6 @@ def senal():
         except:
             pass
 
-        # ── VERIFICAR SI LA SEÑAL ES VÁLIDA ─────────────────────
         es_valida = (
             resultado["direccion"] in ("BUY", "SELL") and
             confianza >= CONFIANZA_MINIMA
@@ -532,8 +558,8 @@ def senal():
             "es_otc": "OTC" in activo,
             "senal": resultado["direccion"],
             "confianza": confianza if es_valida else 0,
+            "estrategia_usada": estrategia_usada,
             
-            # ── TIMING ──────────────────────────────────────────
             "hora_actual": actual_broker.strftime("%H:%M:%S"),
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
             "hora_salida": salida_broker.strftime("%H:%M:%S"),
@@ -541,17 +567,6 @@ def senal():
             "segundos_para_entrar": max(0, round(seg_para_entrar, 1)),
             "timezone": "UTC-6",
             
-            # ── ANÁLISIS ────────────────────────────────────────
-            "patrones_encontrados": patrones_encontrados,
-            "pct_acierto": resultado.get("pct_acierto", 0),
-            "tipo_mas_comun": resultado.get("tipo_mas_comun", "N/A"),
-            "fuerza_promedio_siguiente": resultado.get("fuerza_promedio_siguiente", 0),
-            "verificacion": resultado.get("verificacion", False),
-            "progreso_vela": resultado.get("progreso_vela", 0),
-            "velas_analizadas": resultado.get("velas_analizadas", 0),
-            "vela_en_movimiento": resultado.get("vela_en_movimiento", False),
-            
-            # ── RAZONES ─────────────────────────────────────────
             "razones": resultado.get("razones", []),
             "votos_buy": resultado.get("votos_buy", 0),
             "votos_sell": resultado.get("votos_sell", 0),
@@ -559,7 +574,6 @@ def senal():
             "volatilidad": resultado.get("volatilidad", "media"),
             "indicadores": resultado.get("indicadores", {}),
             
-            # ── INFO OPERACIÓN ──────────────────────────────────
             "duracion_seg": int(duracion_seg),
             "duracion_min": duracion_min,
             "intervalo_vela": intervalo,
@@ -570,26 +584,17 @@ def senal():
         log.exception("Error en /iq/senal")
         return jsonify({"error": str(e)}), 500
 
-
 # ════════════════════════════════════════════════════════════════
-#  ENDPOINT: ESCANEO DE TODOS LOS ACTIVOS OTC
+#  ENDPOINT: ESCANEO AUTOMÁTICO DE TODOS LOS ACTIVOS
 # ════════════════════════════════════════════════════════════════
 
 @app.route("/iq/escanear", methods=["POST"])
 @requiere_conexion
 def escanear_activos():
     """
-    ESCANEA TODOS LOS ACTIVOS OTC
+    ESCANEA TODOS LOS ACTIVOS OTC CON 30 ESTRATEGIAS
     
-    LÓGICA:
-    Para CADA activo OTC:
-    1. Toma 5 velas CERRADAS de ESE activo
-    2. Busca el patrón en el historial de ESE activo (15,000 velas)
-    3. SALTA la vela actual (en movimiento)
-    4. Predice la PRÓXIMA vela
-    5. Guarda la señal si es válida
-    
-    RETORNA: El MEJOR activo (mayor confianza)
+    Encuentra el MEJOR activo para operar en este momento
     """
     api = sesion["api"]
     body = request.get_json(force=True)
@@ -597,49 +602,43 @@ def escanear_activos():
     duracion_min = float(body.get("duracion", 1))
     intervalo = INTERVALO_FIJO
     
-    # Obtener TODOS los activos OTC
-    activos_otc = [a for a in _cache_activos if a["es_otc"]]
+    # Obtener TODOS los activos
+    activos = _cache_activos if _cache_activos else []
     
-    log.info(f"🔍 Escaneando TODOS los {len(activos_otc)} activos OTC...")
-    log.info(f"📊 Búsqueda de patrones con SALTO de vela (15,000 velas)")
+    log.info(f"🔍 Escaneando {len(activos)} activos con 30 estrategias...")
     
     resultados = []
     activos_analizados = 0
     
-    for activo in activos_otc:
+    for activo in activos:
         ticker = activo["ticker"]
         try:
-            # Obtener velas del activo
             raw = api.get_candles(ticker, intervalo, VELAS_PARA_ANALISIS, time.time())
             if not raw:
                 continue
             
             candles = [raw_a_vela(c) for c in raw]
-            
-            # Generar señal para ESTE activo (busca en su propio historial)
-            senal = generar_senal(candles, "estructura", intervalo)
+            senal = generar_senal(candles, "30_estrategias", intervalo)
             activos_analizados += 1
             
-            # Solo guardar señales válidas
             if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= CONFIANZA_MINIMA:
                 resultados.append({
                     "activo": ticker,
                     "nombre": _nombre_legible(ticker),
                     "direccion": senal["direccion"],
                     "confianza": senal["confianza"],
-                    "patrones": senal.get("patrones_encontrados", 0),
-                    "pct_acierto": senal.get("pct_acierto", 0),
-                    "tipo_mas_comun": senal.get("tipo_mas_comun", "N/A"),
-                    "fuerza_promedio": senal.get("fuerza_promedio_siguiente", 0),
+                    "estrategia": senal.get("estrategia_usada", "Ninguna"),
+                    "votos_buy": senal.get("votos_buy", 0),
+                    "votos_sell": senal.get("votos_sell", 0),
                     "razones": senal.get("razones", [])[:3],
                     "payout": activo["payout"],
+                    "es_obligatorio": activo.get("obligatorio", False),
+                    "estrella": activo.get("estrella", ""),
                 })
             
-            # Pequeña pausa para no saturar
-            time.sleep(0.08)
+            time.sleep(0.05)
             
         except Exception as e:
-            log.error(f"Error escaneando {ticker}: {e}")
             continue
     
     # ── TIMING PERFECTO ──────────────────────────────────────────
@@ -666,11 +665,11 @@ def escanear_activos():
     verificar_broker = hora_broker(ts_verificar)
     
     # ── ORDENAR POR CONFIANZA ──────────────────────────────────
-    resultados.sort(key=lambda x: x["confianza"], reverse=True)
+    resultados.sort(key=lambda x: (x["es_obligatorio"] is False, -x["confianza"]))
     
     if resultados:
         mejor = resultados[0]
-        log.info(f"✅ MEJOR SEÑAL: {mejor['activo']} → {mejor['direccion']} ({mejor['confianza']}%)")
+        log.info(f"✅ MEJOR SEÑAL: {mejor['activo']} → {mejor['direccion']} ({mejor['confianza']}%) - {mejor['estrategia']}")
         
         return jsonify({
             "ok": True,
@@ -678,14 +677,14 @@ def escanear_activos():
             "activo": mejor["activo"],
             "nombre": mejor["nombre"],
             "confianza": mejor["confianza"],
-            "patrones": mejor["patrones"],
-            "pct_acierto": mejor["pct_acierto"],
-            "tipo_mas_comun": mejor["tipo_mas_comun"],
-            "fuerza_promedio": mejor["fuerza_promedio"],
+            "estrategia": mejor["estrategia"],
+            "votos_buy": mejor.get("votos_buy", 0),
+            "votos_sell": mejor.get("votos_sell", 0),
             "razones": mejor["razones"],
             "payout": mejor["payout"],
+            "es_obligatorio": mejor.get("es_obligatorio", False),
+            "estrella": mejor.get("estrella", ""),
             
-            # ── TIMING ──────────────────────────────────────────
             "hora_actual": actual_broker.strftime("%H:%M:%S"),
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
             "hora_salida": salida_broker.strftime("%H:%M:%S"),
@@ -698,8 +697,6 @@ def escanear_activos():
             "señales_encontradas": len(resultados),
             "mejores_activos": resultados[:10],
             "mensaje_entrada": f"Entrar a {mejor['nombre']} a las {entrada_broker.strftime('%H:%M:%S')}",
-            "analisis_tipo": "patron_con_salto_vela",
-            "max_velas_historicas": 15000,
         })
     else:
         return jsonify({
@@ -709,36 +706,40 @@ def escanear_activos():
             "hora_actual": actual_broker.strftime("%H:%M:%S"),
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
             "segundos_para_entrar": max(0, round(seg_para_entrar, 1)),
-            "analisis_tipo": "patron_con_salto_vela",
-            "max_velas_historicas": 15000,
         })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print("="*80)
-    print("  IQ Option Bot API  v13.3 - OPTIMIZADO (15,000 velas)")
+    print("  IQ Option Bot API  v14.0 - 30 ESTRATEGIAS")
     print(f"  http://0.0.0.0:{port}")
     print("="*80)
     print("")
-    print("  🔥 LÓGICA DE ANÁLISIS:")
-    print("     ✅ Toma 5 velas CERRADAS del activo")
-    print("     ✅ Busca el patrón en el HISTORIAL del MISMO activo")
-    print("     ✅ SALTA la vela actual (en movimiento)")
-    print("     ✅ Predice la PRÓXIMA vela (después de la actual)")
-    print("     ✅ ¡SIEMPRE BUY o SELL!")
+    print("  🔥 30 ESTRATEGIAS DE TRADING:")
+    print("     ✅ Engulfing + RSI           ✅ Bollinger + Stoch")
+    print("     ✅ SuperTrend + EMA          ✅ Fibonacci + Patrón")
+    print("     ✅ MACD + Momentum           ✅ Pin Bar + Soporte")
+    print("     ✅ 3 Velas + Tendencia       ✅ RSI Divergencia")
+    print("     ✅ Squeeze Momentum          ✅ Ichimoku")
+    print("     ✅ Order Block + RSI         ✅ CHoCH + EMA")
+    print("     ✅ Stoch RSI + Squeeze       ✅ RSI Div Oculta")
+    print("     ✅ MACD Div + Pin Bar        ✅ CCI + Engulfing")
+    print("     ✅ Williams + 3 Velas        ✅ 3 Drives + Fibonacci")
+    print("     ✅ ABCD + RSI                ✅ Gartley + Bollinger")
+    print("     ✅ Bat + Stoch               ✅ Butterfly + SuperTrend")
+    print("")
+    print("  ⭐ 10 ACTIVOS OBLIGATORIOS:")
+    print("     EUR/USD, GBP/USD, EUR/GBP, AUD/USD, USD/JPY")
+    print("     USD/CHF, XAU/USD, BTC/USD, ETH/USD, EUR/JPY")
     print("")
     print("  📊 CONFIGURACIÓN:")
     print(f"     📊 Intervalo de velas: {INTERVALO_FIJO}s")
-    print(f"     📊 Máximo velas históricas: 15,000 (~10.4 días)")
+    print(f"     📊 Máximo velas históricas: {VELAS_PARA_ANALISIS}")
     print(f"     🎯 Entrada SIEMPRE en HH:MM:00 (inicio de vela)")
     print(f"     🕐 Zona horaria del BROKER: UTC-6")
     print(f"     🔒 Confianza mínima: {CONFIANZA_MINIMA}%")
     print("     🔍 ESCANEA TODOS los activos OTC")
     print("     🏆 Encuentra el MEJOR activo para operar")
-    print("")
-    print("  🔧 CORRECCIONES APLICADAS:")
-    print("     ✅ PATCH para error get_digital_underlying_list_data")
-    print("     ✅ FORZADO a 60 segundos en velas live")
-    print("     ✅ OPTIMIZADO a 15,000 velas históricas")
+    print("     ⚡ Señal automática cada minuto")
     print("="*80)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
