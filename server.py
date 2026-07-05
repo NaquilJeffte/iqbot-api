@@ -1,10 +1,12 @@
 """
-server.py — IQ Option Bot API v14.1
-- 30 ESTRATEGIAS + ESCANEO AUTOMÁTICO
+server.py — IQ Option Bot API v15.0
+- PREDICCIÓN CON 1 VELA + 2 CONFIRMACIONES
+- Analiza SOLO la última vela CERRADA
+- Busca esa vela en el historial (1000 velas)
+- CONFIRMA 2 VECES la coincidencia
+- Predice cómo terminará la vela EN MOVIMIENTO
 - 10 ACTIVOS OBLIGATORIOS SIEMPRE VISIBLES
 - CORRECCIÓN DE TICKERS ALTERNATIVOS
-- SEÑAL CADA MINUTO AUTOMÁTICA
-- 500 VELAS (RÁPIDO Y SUFICIENTE)
 - PATCH PARA ERROR get_digital_underlying_list_data
 """
 
@@ -46,8 +48,9 @@ CORS(app, origins="*", allow_headers=["Content-Type","Accept","Authorization","X
 BROKER_TIMEZONE = timezone(timedelta(hours=-6))
 CONFIANZA_MINIMA = 60
 INTERVALO_FIJO = 60
-VELAS_PARA_ANALISIS = 500
+VELAS_PARA_ANALISIS = 1000  # ✅ 1000 velas para buscar confirmaciones
 MAX_ACTIVOS_ESCANEAR = 999
+CONFIRMACIONES_REQUERIDAS = 2  # ✅ REQUIERE 2 CONFIRMACIONES
 
 # ── 10 ACTIVOS OBLIGATORIOS ────────────────────────────────────
 ACTIVOS_OBLIGATORIOS = [
@@ -63,7 +66,7 @@ ACTIVOS_OBLIGATORIOS = [
     {"ticker": "EURJPY-OTC", "nombre": "EUR/JPY (OTC)", "payout": 85, "estrella": "⭐"},
 ]
 
-# ── MAPEO DE TICKERS ALTERNATIVOS (CORRECCIÓN) ──────────────────
+# ── MAPEO DE TICKERS ALTERNATIVOS ──────────────────────────────
 TICKER_ALTERNATIVOS = {
     "EURUSD-OTC": ["EURUSD-OTC", "EURUSD", "EUR-USD"],
     "GBPUSD-OTC": ["GBPUSD-OTC", "GBPUSD", "GBP-USD"],
@@ -176,15 +179,11 @@ def hora_broker(timestamp):
     return datetime.fromtimestamp(timestamp, tz=BROKER_TIMEZONE)
 
 # ════════════════════════════════════════════════════════════════
-#  FUNCIÓN PARA OBTENER VELAS CON FALLBACK DE TICKERS (NUEVA)
+#  FUNCIÓN PARA OBTENER VELAS CON FALLBACK DE TICKERS
 # ════════════════════════════════════════════════════════════════
 
 def obtener_velas_con_fallback(api, ticker, intervalo, cantidad):
-    """
-    Intenta obtener velas con el ticker principal,
-    si falla, prueba con alternativos
-    """
-    # Lista de tickers a probar
+    """Intenta obtener velas con el ticker principal, si falla, prueba con alternativos"""
     tickers_a_probar = TICKER_ALTERNATIVOS.get(ticker, [ticker])
     
     for t in tickers_a_probar:
@@ -320,15 +319,16 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api": "IQ Option Bot API",
-        "version": "14.1",
+        "version": "15.0",
         "estado": "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
         "confianza_minima": CONFIANZA_MINIMA,
-        "analisis": "30_estrategias",
-        "max_velas_historicas": 500,
+        "confirmaciones_requeridas": CONFIRMACIONES_REQUERIDAS,
+        "analisis": "1_vela_2_confirmaciones",
+        "max_velas_historicas": VELAS_PARA_ANALISIS,
         "activos_obligatorios": len(ACTIVOS_OBLIGATORIOS),
         "duraciones": DURACIONES,
     })
@@ -343,7 +343,7 @@ def ping():
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
-        "version": "14.1",
+        "version": "15.0",
         "timestamp": int(time.time()),
     })
 
@@ -523,13 +523,13 @@ def velas_stop():
         return jsonify({"error": str(e)}), 500
 
 # ════════════════════════════════════════════════════════════════
-#  ENDPOINT: SEÑAL PARA UN ACTIVO ESPECÍFICO
+#  ENDPOINT: SEÑAL PARA UN ACTIVO ESPECÍFICO (1 VELA + 2 CONFIRMACIONES)
 # ════════════════════════════════════════════════════════════════
 
 @app.route("/iq/senal", methods=["POST"])
 @requiere_conexion
 def senal():
-    """Señal para un activo específico con 30 estrategias"""
+    """Señal para un activo específico - 1 vela + 2 confirmaciones"""
     api = sesion["api"]
     body = request.get_json(force=True)
 
@@ -539,16 +539,16 @@ def senal():
     cantidad_velas = int(body.get("cantidad_velas", VELAS_PARA_ANALISIS))
 
     try:
-        # ── OBTENER VELAS CON FALLBACK ──────────────────────────
         raw = obtener_velas_con_fallback(api, activo, intervalo, cantidad_velas)
         if not raw:
             return jsonify({"error": f"Sin velas para {activo}"}), 404
 
         candles = [raw_a_vela(c) for c in raw]
-        resultado = generar_senal(candles, "30_estrategias", intervalo)
+        resultado = generar_senal(candles, "1_vela", intervalo)
 
         confianza = resultado.get("confianza", 0)
-        estrategia_usada = resultado.get("estrategia_usada", "Ninguna")
+        confirmado = resultado.get("confirmado", False)
+        confirmaciones = resultado.get("confirmaciones", 0)
 
         # ── TIMING PERFECTO ──────────────────────────────────────
         ahora_ts = time.time()
@@ -581,9 +581,11 @@ def senal():
         except:
             pass
 
+        # ── VALIDAR SEÑAL ──────────────────────────────────────
         es_valida = (
             resultado["direccion"] in ("BUY", "SELL") and
-            confianza >= CONFIANZA_MINIMA
+            confianza >= CONFIANZA_MINIMA and
+            confirmado  # ✅ REQUIERE 2 CONFIRMACIONES
         )
 
         if not es_valida:
@@ -597,7 +599,9 @@ def senal():
             "es_otc": "OTC" in activo,
             "senal": resultado["direccion"],
             "confianza": confianza if es_valida else 0,
-            "estrategia_usada": estrategia_usada,
+            "confirmado": confirmado,
+            "confirmaciones": confirmaciones,
+            "confirmaciones_requeridas": CONFIRMACIONES_REQUERIDAS,
             
             "hora_actual": actual_broker.strftime("%H:%M:%S"),
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
@@ -612,6 +616,10 @@ def senal():
             "tendencia": resultado.get("tendencia", "LATERAL"),
             "volatilidad": resultado.get("volatilidad", "media"),
             "indicadores": resultado.get("indicadores", {}),
+            "estructura_ultima": resultado.get("estructura_ultima", "N/A"),
+            "color_ultima": resultado.get("color_ultima", "N/A"),
+            "tipo_mas_comun": resultado.get("tipo_mas_comun", "N/A"),
+            "fuerza_promedio_siguiente": resultado.get("fuerza_promedio_siguiente", 0),
             
             "duracion_seg": int(duracion_seg),
             "duracion_min": duracion_min,
@@ -631,7 +639,7 @@ def senal():
 @requiere_conexion
 def escanear_activos():
     """
-    ESCANEA TODOS LOS ACTIVOS CON FALLBACK DE TICKERS
+    ESCANEA TODOS LOS ACTIVOS CON 1 VELA + 2 CONFIRMACIONES
     """
     api = sesion["api"]
     body = request.get_json(force=True)
@@ -639,10 +647,9 @@ def escanear_activos():
     duracion_min = float(body.get("duracion", 1))
     intervalo = INTERVALO_FIJO
     
-    # Obtener TODOS los activos
     activos = _cache_activos if _cache_activos else []
     
-    log.info(f"🔍 Escaneando {len(activos)} activos con fallback de tickers...")
+    log.info(f"🔍 Escaneando {len(activos)} activos con 1 vela + 2 confirmaciones...")
     
     resultados = []
     activos_analizados = 0
@@ -650,25 +657,23 @@ def escanear_activos():
     for activo in activos:
         ticker = activo["ticker"]
         try:
-            # ── OBTENER VELAS CON FALLBACK ──────────────────────
             raw = obtener_velas_con_fallback(api, ticker, intervalo, VELAS_PARA_ANALISIS)
             if not raw:
-                log.warning(f"⚠️ No se pudieron obtener velas para {ticker}")
                 continue
             
             candles = [raw_a_vela(c) for c in raw]
-            senal = generar_senal(candles, "30_estrategias", intervalo)
+            senal = generar_senal(candles, "1_vela", intervalo)
             activos_analizados += 1
             
-            if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= CONFIANZA_MINIMA:
+            if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= CONFIANZA_MINIMA and senal.get("confirmado", False):
                 resultados.append({
                     "activo": ticker,
                     "nombre": _nombre_legible(ticker),
                     "direccion": senal["direccion"],
                     "confianza": senal["confianza"],
-                    "estrategia": senal.get("estrategia_usada", "Ninguna"),
-                    "votos_buy": senal.get("votos_buy", 0),
-                    "votos_sell": senal.get("votos_sell", 0),
+                    "confirmaciones": senal.get("confirmaciones", 0),
+                    "estructura": senal.get("estructura_ultima", "N/A"),
+                    "tipo_mas_comun": senal.get("tipo_mas_comun", "N/A"),
                     "razones": senal.get("razones", [])[:3],
                     "payout": activo["payout"],
                     "es_obligatorio": activo.get("obligatorio", False),
@@ -678,10 +683,10 @@ def escanear_activos():
             time.sleep(0.05)
             
         except Exception as e:
-            log.error(f"Error escaneando {ticker}: {e}")
             continue
     
-    # ── TIMING PERFECTO ──────────────────────────────────────────
+    resultados.sort(key=lambda x: (x["es_obligatorio"] is False, -x["confianza"]))
+    
     ahora_ts = time.time()
     ahora_broker = hora_broker(ahora_ts)
     segundos_en_minuto = ahora_broker.second + (ahora_broker.microsecond / 1000000)
@@ -695,21 +700,12 @@ def escanear_activos():
         seg_para_entrar = 60
     
     ts_entrada = ahora_ts + seg_para_entrar
-    duracion_seg = duracion_min * 60
-    ts_salida = ts_entrada + duracion_seg
-    ts_verificar = ts_entrada + (duracion_seg / 2)
-    
     entrada_broker = hora_broker(ts_entrada)
-    salida_broker = hora_broker(ts_salida)
     actual_broker = hora_broker(ahora_ts)
-    verificar_broker = hora_broker(ts_verificar)
-    
-    # ── ORDENAR POR CONFIANZA ──────────────────────────────────
-    resultados.sort(key=lambda x: (x["es_obligatorio"] is False, -x["confianza"]))
     
     if resultados:
         mejor = resultados[0]
-        log.info(f"✅ MEJOR SEÑAL: {mejor['activo']} → {mejor['direccion']} ({mejor['confianza']}%) - {mejor['estrategia']}")
+        log.info(f"✅ MEJOR SEÑAL: {mejor['activo']} → {mejor['direccion']} ({mejor['confianza']}%) - {mejor['estructura']}")
         
         return jsonify({
             "ok": True,
@@ -717,18 +713,17 @@ def escanear_activos():
             "activo": mejor["activo"],
             "nombre": mejor["nombre"],
             "confianza": mejor["confianza"],
-            "estrategia": mejor["estrategia"],
-            "votos_buy": mejor.get("votos_buy", 0),
-            "votos_sell": mejor.get("votos_sell", 0),
+            "confirmaciones": mejor["confirmaciones"],
+            "estructura": mejor["estructura"],
+            "tipo_mas_comun": mejor["tipo_mas_comun"],
             "razones": mejor["razones"],
             "payout": mejor["payout"],
             "es_obligatorio": mejor.get("es_obligatorio", False),
             "estrella": mejor.get("estrella", ""),
+            "confirmaciones_requeridas": CONFIRMACIONES_REQUERIDAS,
             
             "hora_actual": actual_broker.strftime("%H:%M:%S"),
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
-            "hora_salida": salida_broker.strftime("%H:%M:%S"),
-            "hora_verificar": verificar_broker.strftime("%H:%M:%S"),
             "segundos_para_entrar": max(0, round(seg_para_entrar, 1)),
             "timezone": "UTC-6",
             
@@ -741,7 +736,7 @@ def escanear_activos():
     else:
         return jsonify({
             "ok": False,
-            "mensaje": "No se encontraron señales en este momento",
+            "mensaje": "No se encontraron señales con confirmación",
             "total_escaneados": activos_analizados,
             "hora_actual": actual_broker.strftime("%H:%M:%S"),
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
@@ -751,9 +746,12 @@ def escanear_activos():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print("="*80)
-    print("  IQ Option Bot API  v14.1 - CORRECCIÓN DE TICKERS")
+    print("  IQ Option Bot API  v15.0 - 1 VELA + 2 CONFIRMACIONES")
     print(f"  http://0.0.0.0:{port}")
     print("="*80)
     print("")
-    print("  🔥 30 ESTRATEGIAS DE TRADING:")
-    print("     ✅ Engulfing +
+    print("  🔥 NUEVA LÓGICA DE ANÁLISIS:")
+    print("     ✅ Toma SOLO la última vela CERRADA")
+    print("     ✅ Busca esa vela en el historial (1000 velas)")
+    print("     ✅ CONFIRMA 2 VECES la coincidencia")
+    print("     ✅ Predice cómo terminará la vela EN
