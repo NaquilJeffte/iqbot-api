@@ -1,11 +1,12 @@
 """
-analysis.py v13.1 — BÚSQUEDA CON SALTO DE VELA (CORREGIDO)
+analysis.py v13.2 — BÚSQUEDA CON SALTO DE VELA (CORREGIDO Y COMPLETO)
 - Busca 5 velas CERRADAS en el historial del MISMO activo
 - SALTA la vela actual (en movimiento)
 - Predice la PRÓXIMA vela (después de la actual)
 - ¡SIEMPRE BUY o SELL!
 - Precisión 90-95%
 - COMPATIBILIDAD COMPLETA con server.py
+- CORREGIDO: todos los campos necesarios para server.py
 """
 
 import math
@@ -333,12 +334,12 @@ def ema_rapida(prices, period):
     return val
 
 # ═══════════════════════════════════════════════════════════════
-#  MOTOR PRINCIPAL v13.0 — BÚSQUEDA CON SALTO
+#  MOTOR PRINCIPAL v13.2 — BÚSQUEDA CON SALTO (COMPLETO)
 # ═══════════════════════════════════════════════════════════════
 
 def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     """
-    MOTOR v13.0 — BÚSQUEDA CON SALTO DE VELA
+    MOTOR v13.2 — BÚSQUEDA CON SALTO DE VELA
     
     1. Toma 5 velas CERRADAS del activo
     2. Busca el patrón en el HISTORIAL del MISMO activo
@@ -362,12 +363,24 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
             "tipo_mas_comun": "N/A",
             "fuerza_promedio_siguiente": 0,
             "vela_en_movimiento": False,
+            "volatilidad": "media",
+            "tendencia": "LATERAL",
+            "score_buy": 0,
+            "score_sell": 0,
             "indicadores": {
+                "precio": 0,
                 "rsi": 50,
                 "tendencia": "LATERAL",
                 "tendencia_fuerza": 0,
                 "ema_dir": "NEUTRAL",
-            }
+                "patron_colores": "",
+                "patron_tipos": "",
+                "total_coincidencias": 0,
+            },
+            "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
+            "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
+            "patrones_velas": [],
+            "timing": {},
         }
 
     # ── 1. SEPARAR VELAS CERRADAS ──────────────────────────────
@@ -403,12 +416,24 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
                 "tipo_mas_comun": "N/A",
                 "fuerza_promedio_siguiente": 0,
                 "vela_en_movimiento": vela_en_movimiento,
+                "volatilidad": "media",
+                "tendencia": "UP",
+                "score_buy": 1,
+                "score_sell": 0,
                 "indicadores": {
+                    "precio": round(ultima["close"], 6),
                     "rsi": 50,
-                    "tendencia": "LATERAL",
+                    "tendencia": "UP",
                     "tendencia_fuerza": 0,
                     "ema_dir": "NEUTRAL",
-                }
+                    "patron_colores": "",
+                    "patron_tipos": "",
+                    "total_coincidencias": 0,
+                },
+                "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
+                "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
+                "patrones_velas": [],
+                "timing": {},
             }
         else:
             return {
@@ -426,12 +451,24 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
                 "tipo_mas_comun": "N/A",
                 "fuerza_promedio_siguiente": 0,
                 "vela_en_movimiento": vela_en_movimiento,
+                "volatilidad": "media",
+                "tendencia": "DOWN",
+                "score_buy": 0,
+                "score_sell": 1,
                 "indicadores": {
+                    "precio": round(ultima["close"], 6),
                     "rsi": 50,
-                    "tendencia": "LATERAL",
+                    "tendencia": "DOWN",
                     "tendencia_fuerza": 0,
                     "ema_dir": "NEUTRAL",
-                }
+                    "patron_colores": "",
+                    "patron_tipos": "",
+                    "total_coincidencias": 0,
+                },
+                "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
+                "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
+                "patrones_velas": [],
+                "timing": {},
             }
 
     # ── 2. TOMAR 5 VELAS CERRADAS ──────────────────────────────
@@ -457,12 +494,24 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
                 "tipo_mas_comun": "N/A",
                 "fuerza_promedio_siguiente": 0,
                 "vela_en_movimiento": vela_en_movimiento,
+                "volatilidad": "media",
+                "tendencia": "UP",
+                "score_buy": 1,
+                "score_sell": 0,
                 "indicadores": {
+                    "precio": round(ultima["close"], 6),
                     "rsi": 50,
-                    "tendencia": "LATERAL",
+                    "tendencia": "UP",
                     "tendencia_fuerza": 0,
                     "ema_dir": "NEUTRAL",
-                }
+                    "patron_colores": "",
+                    "patron_tipos": "",
+                    "total_coincidencias": 0,
+                },
+                "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
+                "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
+                "patrones_velas": [],
+                "timing": {},
             }
         else:
             return {
@@ -480,12 +529,24 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
                 "tipo_mas_comun": "N/A",
                 "fuerza_promedio_siguiente": 0,
                 "vela_en_movimiento": vela_en_movimiento,
+                "volatilidad": "media",
+                "tendencia": "DOWN",
+                "score_buy": 0,
+                "score_sell": 1,
                 "indicadores": {
+                    "precio": round(ultima["close"], 6),
                     "rsi": 50,
-                    "tendencia": "LATERAL",
+                    "tendencia": "DOWN",
                     "tendencia_fuerza": 0,
                     "ema_dir": "NEUTRAL",
-                }
+                    "patron_colores": "",
+                    "patron_tipos": "",
+                    "total_coincidencias": 0,
+                },
+                "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
+                "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
+                "patrones_velas": [],
+                "timing": {},
             }
 
     # ── 4. BUSCAR PATRÓN EN HISTORIAL CON SALTO ────────────────
@@ -629,7 +690,8 @@ def seleccionar_estrategia_auto(candles):
 
 def calcular_volatilidad_real(candles, periodo=14):
     """Calcula volatilidad real con formato compatible con server.py"""
-    return 0.0, detectar_volatilidad(candles)
+    vol = detectar_volatilidad(candles, periodo)
+    return 0.0, vol
 
 def calcular_volatilidad_real_simple(candles, periodo=14):
     """Versión simple de cálculo de volatilidad para compatibilidad"""
@@ -674,13 +736,3 @@ def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
     
     resultados.sort(key=lambda x: x["certeza"], reverse=True)
     
-    if not resultados:
-        return {"ok": False, "mensaje": "Sin señales claras ahora", "activos": []}
-    
-    mejor = resultados[0]
-    return {
-        "ok": True,
-        "mensaje": f"{mejor['activo']} → {mejor['direccion']} (confianza: {mejor['certeza']}%)",
-        "mejor": mejor,
-        "activos": resultados[:5],
-    }
