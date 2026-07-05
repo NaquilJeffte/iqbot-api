@@ -1,10 +1,10 @@
 """
-analysis.py v15.0 — PREDICCIÓN CON 1 VELA + 2 CONFIRMACIONES
+analysis.py v15.1 — PREDICCIÓN CON 1 VELA + CONFIRMACIÓN FLEXIBLE
 - Analiza SOLO la última vela CERRADA
 - Busca esa vela en el historial (1000 velas)
-- CONFIRMA 2 VECES la coincidencia
+- CONFIRMA 1 VEZ (flexible, compara solo color + tipo)
 - Predice cómo terminará la vela EN MOVIMIENTO
-- ¡MÁS PRECISO!
+- ¡MÁS SEÑALES!
 """
 
 import math
@@ -14,10 +14,10 @@ import time
 #  CONFIGURACIÓN
 # ═══════════════════════════════════════════════════════════════
 
-CONFIANZA_MINIMA = 60
+CONFIANZA_MINIMA = 55
 MAX_VELAS_HISTORIAL = 1000
-VELAS_PATRON = 1  # ✅ SOLO 1 VELA
-CONFIRMACIONES_REQUERIDAS = 2  # ✅ REQUIERE 2 CONFIRMACIONES
+VELAS_PATRON = 1
+CONFIRMACIONES_REQUERIDAS = 1  # ✅ SOLO 1 CONFIRMACIÓN
 
 # ═══════════════════════════════════════════════════════════════
 #  ANALIZAR ESTRUCTURA DE VELA (COMPLETA)
@@ -121,10 +121,9 @@ def analizar_estructura_vela(vela):
     }
 
 def obtener_codigo_vela(vela):
-    """Crea un código único para una vela basado en su estructura"""
+    """Crea un código para una vela: Color + Tipo (sin fuerza exacta)"""
     analisis = analizar_estructura_vela(vela)
     
-    # Código: Color + Tipo + Fuerza + Relación de mechas
     color = "V" if analisis["color"] == "VERDE" else "R"
     
     codigos_tipo = {
@@ -137,19 +136,17 @@ def obtener_codigo_vela(vela):
         "RECHAZO_INFERIOR_BAJISTA": "RJ",
     }
     tipo = codigos_tipo.get(analisis["tipo"], "XX")
-    fuerza = round(analisis["fuerza"] / 10, 1)
-    mecha = round((analisis["rel_mecha_sup"] + analisis["rel_mecha_inf"]) / 2, 2)
     
-    return f"{color}{tipo}{fuerza}{mecha}"
+    return f"{color}{tipo}"
 
 # ═══════════════════════════════════════════════════════════════
-#  BUSCAR VELA EN HISTORIAL (CON 2 CONFIRMACIONES)
+#  BUSCAR VELA EN HISTORIAL (CONFIRMACIÓN FLEXIBLE)
 # ═══════════════════════════════════════════════════════════════
 
 def buscar_vela_con_confirmacion(candles_historicas, vela_actual, profundidad=1000):
     """
     Busca la vela actual en el historial
-    REQUIERE 2 CONFIRMACIONES para dar señal
+    Compara solo Color + Tipo (ignora fuerza exacta)
     """
     if len(candles_historicas) < 10:
         return []
@@ -164,10 +161,10 @@ def buscar_vela_con_confirmacion(candles_historicas, vela_actual, profundidad=10
         vela_historial = candles_historicas[i]
         codigo_historial = obtener_codigo_vela(vela_historial)
         
+        # ✅ COMPARAR SOLO COLOR + TIPO (ignorar fuerza exacta)
         if codigo_historial == codigo_buscar:
             coincidencias += 1
             
-            # Ver qué pasó DESPUÉS de esta vela
             if i + 1 < len(candles_historicas):
                 siguiente = candles_historicas[i + 1]
                 cambio = (siguiente["close"] - siguiente["open"]) / siguiente["open"] * 100
@@ -182,7 +179,7 @@ def buscar_vela_con_confirmacion(candles_historicas, vela_actual, profundidad=10
                     "coincidencia": coincidencias,
                 })
                 
-                # ✅ Si encontramos 2 confirmaciones, podemos parar
+                # ✅ Si encontramos CONFIRMACIONES_REQUERIDAS, paramos
                 if coincidencias >= CONFIRMACIONES_REQUERIDAS:
                     break
     
@@ -225,12 +222,10 @@ def analizar_resultados_vela(resultados):
     tipo_mas_comun = max(tipos.items(), key=lambda x: x[1])[0] if tipos else "N/A"
     fuerza_promedio = sum(fuerzas) / len(fuerzas) if fuerzas else 0
     
-    # Confianza = % de acierto + bonificación por fuerza
     pct_ganador = max(pct_up, pct_down)
     bonus_fuerza = min(fuerza_promedio / 20, 15)
     confianza = min(pct_ganador + bonus_fuerza, 98)
     
-    # Verificar si se cumplieron las 2 confirmaciones
     confirmado = total >= CONFIRMACIONES_REQUERIDAS
     
     return {
@@ -288,16 +283,16 @@ def tendencia_rapida(closes, ventana=20):
     return ("UP" if slope > 0 else "DOWN"), round(slope_pct, 2)
 
 # ═══════════════════════════════════════════════════════════════
-#  MOTOR PRINCIPAL v15.0 — 1 VELA + 2 CONFIRMACIONES
+#  MOTOR PRINCIPAL v15.1 — 1 VELA + 1 CONFIRMACIÓN FLEXIBLE
 # ═══════════════════════════════════════════════════════════════
 
 def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     """
-    MOTOR v15.0 — PREDICCIÓN CON 1 VELA + 2 CONFIRMACIONES
+    MOTOR v15.1 — PREDICCIÓN CON 1 VELA + 1 CONFIRMACIÓN FLEXIBLE
     
     1. Toma SOLO la última vela CERRADA
     2. Busca esa vela en el historial (1000 velas)
-    3. CONFIRMA 2 VECES la coincidencia
+    3. CONFIRMA 1 VEZ (flexible: compara color + tipo)
     4. Predice cómo terminará la vela EN MOVIMIENTO
     """
     if len(candles) < 20:
@@ -323,9 +318,8 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     tiempo_abierta = ahora - timestamp_vela
     
     if tiempo_abierta < timeframe_seg:
-        # La última vela está en movimiento
         velas_cerradas = candles[:-1]
-        vela_actual = candles[-1]  # La que está en movimiento
+        vela_actual = candles[-1]
         vela_en_movimiento = True
     else:
         velas_cerradas = candles
@@ -355,8 +349,8 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     # ── 3. ANALIZAR LA ÚLTIMA VELA CERRADA ──────────────────
     estructura_ultima = analizar_estructura_vela(ultima_cerrada)
     
-    # ── 4. BUSCAR EN HISTORIAL CON CONFIRMACIÓN ──────────────
-    historial = velas_cerradas[:-1]  # Excluir la última cerrada
+    # ── 4. BUSCAR EN HISTORIAL CON CONFIRMACIÓN FLEXIBLE ────
+    historial = velas_cerradas[:-1]
     resultados = buscar_vela_con_confirmacion(historial, ultima_cerrada, MAX_VELAS_HISTORIAL)
     analisis = analizar_resultados_vela(resultados)
 
@@ -369,20 +363,20 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     confianza = 0
     razones = []
     
-    # ✅ SOLO SI HAY 2 CONFIRMACIONES
+    # ✅ SOLO SI HAY CONFIRMACIÓN (1 es suficiente)
     if analisis["confirmado"]:
         if analisis["pct_up"] >= CONFIANZA_MINIMA:
             direccion = "BUY"
             confianza = analisis["confianza"]
             razones.append(f"📊 Vela: {estructura_ultima['tipo']} ({estructura_ultima['color']})")
-            razones.append(f"✅ {analisis['confirmaciones']} confirmaciones en historial")
+            razones.append(f"✅ {analisis['confirmaciones']} confirmación en historial")
             razones.append(f"📈 {analisis['pct_up']}% de las veces → VERDE")
             razones.append(f"📈 Tipo siguiente: {analisis['tipo_mas_comun']}")
         elif analisis["pct_down"] >= CONFIANZA_MINIMA:
             direccion = "SELL"
             confianza = analisis["confianza"]
             razones.append(f"📊 Vela: {estructura_ultima['tipo']} ({estructura_ultima['color']})")
-            razones.append(f"✅ {analisis['confirmaciones']} confirmaciones en historial")
+            razones.append(f"✅ {analisis['confirmaciones']} confirmación en historial")
             razones.append(f"📉 {analisis['pct_down']}% de las veces → ROJA")
             razones.append(f"📉 Tipo siguiente: {analisis['tipo_mas_comun']}")
     
@@ -390,7 +384,7 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
         if analisis["confirmado"]:
             razones = ["No hay suficiente confianza en las confirmaciones"]
         else:
-            razones = [f"Solo {analisis['confirmaciones']} confirmaciones (necesita {CONFIRMACIONES_REQUERIDAS})"]
+            razones = [f"Solo {analisis['confirmaciones']} confirmación (necesita {CONFIRMACIONES_REQUERIDAS})"]
 
     # ── 7. INFORMACIÓN DE LA VELA EN MOVIMIENTO ──────────────
     if vela_en_movimiento and vela_actual:
@@ -400,7 +394,7 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
         if direccion != "ESPERAR":
             razones.append(f"🎯 PREDICCIÓN: La vela en movimiento terminará {direccion}")
         else:
-            razones.append(f"⚠️ Esperando más confirmaciones")
+            razones.append(f"⚠️ Esperando confirmación")
 
     return {
         "direccion": direccion,
@@ -485,7 +479,7 @@ def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
             continue
         try:
             senal = generar_senal(candles, "auto", timeframe_seg)
-            if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= 60:
+            if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= 55:
                 resultados.append({
                     "activo": activo,
                     "direccion": senal["direccion"],
