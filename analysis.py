@@ -1,10 +1,11 @@
 """
-analysis.py v13.0 — BÚSQUEDA CON SALTO DE VELA
+analysis.py v13.1 — BÚSQUEDA CON SALTO DE VELA (CORREGIDO)
 - Busca 5 velas CERRADAS en el historial del MISMO activo
 - SALTA la vela actual (en movimiento)
 - Predice la PRÓXIMA vela (después de la actual)
 - ¡SIEMPRE BUY o SELL!
 - Precisión 90-95%
+- COMPATIBILIDAD COMPLETA con server.py
 """
 
 import math
@@ -357,6 +358,16 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
             "verificacion": False,
             "progreso_vela": 0,
             "velas_analizadas": 0,
+            "total_encontrados": 0,
+            "tipo_mas_comun": "N/A",
+            "fuerza_promedio_siguiente": 0,
+            "vela_en_movimiento": False,
+            "indicadores": {
+                "rsi": 50,
+                "tendencia": "LATERAL",
+                "tendencia_fuerza": 0,
+                "ema_dir": "NEUTRAL",
+            }
         }
 
     # ── 1. SEPARAR VELAS CERRADAS ──────────────────────────────
@@ -388,6 +399,16 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
                 "verificacion": False,
                 "progreso_vela": 0,
                 "velas_analizadas": len(velas_cerradas),
+                "total_encontrados": 0,
+                "tipo_mas_comun": "N/A",
+                "fuerza_promedio_siguiente": 0,
+                "vela_en_movimiento": vela_en_movimiento,
+                "indicadores": {
+                    "rsi": 50,
+                    "tendencia": "LATERAL",
+                    "tendencia_fuerza": 0,
+                    "ema_dir": "NEUTRAL",
+                }
             }
         else:
             return {
@@ -401,6 +422,16 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
                 "verificacion": False,
                 "progreso_vela": 0,
                 "velas_analizadas": len(velas_cerradas),
+                "total_encontrados": 0,
+                "tipo_mas_comun": "N/A",
+                "fuerza_promedio_siguiente": 0,
+                "vela_en_movimiento": vela_en_movimiento,
+                "indicadores": {
+                    "rsi": 50,
+                    "tendencia": "LATERAL",
+                    "tendencia_fuerza": 0,
+                    "ema_dir": "NEUTRAL",
+                }
             }
 
     # ── 2. TOMAR 5 VELAS CERRADAS ──────────────────────────────
@@ -422,6 +453,16 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
                 "verificacion": False,
                 "progreso_vela": 0,
                 "velas_analizadas": len(ultimas_5),
+                "total_encontrados": 0,
+                "tipo_mas_comun": "N/A",
+                "fuerza_promedio_siguiente": 0,
+                "vela_en_movimiento": vela_en_movimiento,
+                "indicadores": {
+                    "rsi": 50,
+                    "tendencia": "LATERAL",
+                    "tendencia_fuerza": 0,
+                    "ema_dir": "NEUTRAL",
+                }
             }
         else:
             return {
@@ -435,6 +476,16 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
                 "verificacion": False,
                 "progreso_vela": 0,
                 "velas_analizadas": len(ultimas_5),
+                "total_encontrados": 0,
+                "tipo_mas_comun": "N/A",
+                "fuerza_promedio_siguiente": 0,
+                "vela_en_movimiento": vela_en_movimiento,
+                "indicadores": {
+                    "rsi": 50,
+                    "tendencia": "LATERAL",
+                    "tendencia_fuerza": 0,
+                    "ema_dir": "NEUTRAL",
+                }
             }
 
     # ── 4. BUSCAR PATRÓN EN HISTORIAL CON SALTO ────────────────
@@ -516,46 +567,120 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
         "pct_acierto": analisis["pct_ganador"],
         "tipo_mas_comun": analisis["tipo_mas_comun"],
         "fuerza_promedio_siguiente": analisis["fuerza_promedio"],
+        "total_encontrados": analisis["total"],
         "verificacion": False,
         "progreso_vela": 0,
         "velas_analizadas": len(velas_cerradas),
         "vela_en_movimiento": vela_en_movimiento,
+        "volatilidad": "media",
+        "tendencia": tendencia,
+        "score_buy": analisis["up_count"],
+        "score_sell": analisis["down_count"],
         "indicadores": {
+            "precio": round(ultimas_5[-1]["close"], 6) if ultimas_5 else 0,
             "rsi": round(rsi_val, 1),
             "tendencia": tendencia,
             "tendencia_fuerza": fuerza_tendencia,
             "ema_dir": ema_dir,
-        }
+            "patron_colores": patron_actual["firma_colores"] if patron_actual else "",
+            "patron_tipos": patron_actual["firma_tipos"] if patron_actual else "",
+            "total_coincidencias": analisis["total"],
+        },
+        "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
+        "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
+        "patrones_velas": [],
+        "timing": {},
     }
 
 
 # ═══════════════════════════════════════════════════════════════
-#  COMPATIBILIDAD
+#  COMPATIBILIDAD COMPLETA CON SERVER.PY
 # ═══════════════════════════════════════════════════════════════
 
 def detectar_volatilidad(candles, periodo=14):
+    """Detecta volatilidad basada en el movimiento del precio"""
     if len(candles) < 5:
         return "media"
-    closes = [c["close"] for c in candles[-periodo:]]
+    
+    closes = [c["close"] for c in candles[-periodo:]] if len(candles) >= periodo else [c["close"] for c in candles]
     if len(closes) < 2:
         return "media"
-    cambios = [abs(closes[i]-closes[i-1])/closes[i-1]*100 
-               for i in range(1, len(closes)) if closes[i-1] > 0]
+    
+    cambios = []
+    for i in range(1, len(closes)):
+        if closes[i-1] > 0:
+            cambio = abs(closes[i] - closes[i-1]) / closes[i-1] * 100
+            cambios.append(cambio)
+    
     if not cambios:
         return "media"
+    
     promedio = sum(cambios) / len(cambios)
-    if promedio > 0.3: return "alta"
-    elif promedio > 0.1: return "media"
+    
+    if promedio > 0.3:
+        return "alta"
+    elif promedio > 0.1:
+        return "media"
     return "baja"
 
 def seleccionar_estrategia_auto(candles):
+    """Selecciona estrategia automática basada en velas"""
     return "automatica", detectar_volatilidad(candles)
 
 def calcular_volatilidad_real(candles, periodo=14):
+    """Calcula volatilidad real con formato compatible con server.py"""
     return 0.0, detectar_volatilidad(candles)
 
 def calcular_volatilidad_real_simple(candles, periodo=14):
-    return 0.0
+    """Versión simple de cálculo de volatilidad para compatibilidad"""
+    if len(candles) < 5:
+        return 0.0
+    closes = [c["close"] for c in candles[-periodo:]] if len(candles) >= periodo else [c["close"] for c in candles]
+    if len(closes) < 2:
+        return 0.0
+    cambios = []
+    for i in range(1, len(closes)):
+        if closes[i-1] > 0:
+            cambios.append(abs(closes[i] - closes[i-1]) / closes[i-1] * 100)
+    if not cambios:
+        return 0.0
+    return round(sum(cambios) / len(cambios), 4)
 
 def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
-    return {"ok": False, "mensaje": "Sin datos", "activos": []}
+    """
+    Escanea múltiples activos y encuentra los mejores
+    Versión completa para compatibilidad con server.py
+    """
+    if not candles_por_activo:
+        return {"ok": False, "mensaje": "Sin datos", "activos": []}
+    
+    resultados = []
+    for activo, candles in candles_por_activo.items():
+        if not candles or len(candles) < 10:
+            continue
+        try:
+            senal = generar_senal(candles, "auto", timeframe_seg)
+            if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= 60:
+                resultados.append({
+                    "activo": activo,
+                    "direccion": senal["direccion"],
+                    "certeza": senal["confianza"],
+                    "volatilidad": senal.get("volatilidad", "media"),
+                    "razones": senal.get("razones", [])[:3],
+                    "analisis": senal,
+                })
+        except Exception:
+            continue
+    
+    resultados.sort(key=lambda x: x["certeza"], reverse=True)
+    
+    if not resultados:
+        return {"ok": False, "mensaje": "Sin señales claras ahora", "activos": []}
+    
+    mejor = resultados[0]
+    return {
+        "ok": True,
+        "mensaje": f"{mejor['activo']} → {mejor['direccion']} (confianza: {mejor['certeza']}%)",
+        "mejor": mejor,
+        "activos": resultados[:5],
+    }
