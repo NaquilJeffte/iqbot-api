@@ -1,5 +1,5 @@
 """
-server.py — IQ Option Bot API v13.1 (COMPLETO Y CORREGIDO)
+server.py — IQ Option Bot API v13.3
 - BÚSQUEDA DE PATRONES CON SALTO DE VELA
 - PATCH para error get_digital_underlying_list_data
 - FORZADO a 60 segundos en velas live
@@ -8,6 +8,7 @@ server.py — IQ Option Bot API v13.1 (COMPLETO Y CORREGIDO)
 - Timing PERFECTO en HH:MM:00
 - Zona horaria del BROKER (UTC-6)
 - Confianza mínima 60%
+- OPTIMIZADO: 15,000 velas históricas
 """
 
 import sys, os
@@ -247,7 +248,7 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api": "IQ Option Bot API",
-        "version": "13.1",
+        "version": "13.3",
         "estado": "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
@@ -255,6 +256,7 @@ def raiz():
         "broker_timezone": "UTC-6",
         "confianza_minima": CONFIANZA_MINIMA,
         "analisis": "patron_con_salto_vela",
+        "max_velas_historicas": 15000,
     })
 
 @app.route("/iq/ping")
@@ -267,7 +269,7 @@ def ping():
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
-        "version": "13.1",
+        "version": "13.3",
         "timestamp": int(time.time()),
     })
 
@@ -459,7 +461,7 @@ def senal():
     
     LÓGICA:
     1. Toma 5 velas CERRADAS del activo
-    2. Busca el patrón en el historial del MISMO activo
+    2. Busca el patrón en el historial del MISMO activo (15,000 velas)
     3. SALTA la vela actual (en movimiento)
     4. Predice la PRÓXIMA vela (después de la actual)
     """
@@ -582,7 +584,7 @@ def escanear_activos():
     LÓGICA:
     Para CADA activo OTC:
     1. Toma 5 velas CERRADAS de ESE activo
-    2. Busca el patrón en el historial de ESE activo
+    2. Busca el patrón en el historial de ESE activo (15,000 velas)
     3. SALTA la vela actual (en movimiento)
     4. Predice la PRÓXIMA vela
     5. Guarda la señal si es válida
@@ -599,7 +601,7 @@ def escanear_activos():
     activos_otc = [a for a in _cache_activos if a["es_otc"]]
     
     log.info(f"🔍 Escaneando TODOS los {len(activos_otc)} activos OTC...")
-    log.info(f"📊 Búsqueda de patrones con SALTO de vela")
+    log.info(f"📊 Búsqueda de patrones con SALTO de vela (15,000 velas)")
     
     resultados = []
     activos_analizados = 0
@@ -697,6 +699,7 @@ def escanear_activos():
             "mejores_activos": resultados[:10],
             "mensaje_entrada": f"Entrar a {mejor['nombre']} a las {entrada_broker.strftime('%H:%M:%S')}",
             "analisis_tipo": "patron_con_salto_vela",
+            "max_velas_historicas": 15000,
         })
     else:
         return jsonify({
@@ -707,12 +710,13 @@ def escanear_activos():
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
             "segundos_para_entrar": max(0, round(seg_para_entrar, 1)),
             "analisis_tipo": "patron_con_salto_vela",
+            "max_velas_historicas": 15000,
         })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print("="*80)
-    print("  IQ Option Bot API  v13.1 - COMPLETO Y CORREGIDO")
+    print("  IQ Option Bot API  v13.3 - OPTIMIZADO (15,000 velas)")
     print(f"  http://0.0.0.0:{port}")
     print("="*80)
     print("")
@@ -723,17 +727,18 @@ if __name__ == "__main__":
     print("     ✅ Predice la PRÓXIMA vela (después de la actual)")
     print("     ✅ ¡SIEMPRE BUY o SELL!")
     print("")
-    print("  🔧 CORRECCIONES APLICADAS:")
-    print("     ✅ PATCH para error get_digital_underlying_list_data")
-    print("     ✅ FORZADO a 60 segundos en velas live")
-    print("     ✅ Manejo de errores mejorado")
-    print("")
     print("  📊 CONFIGURACIÓN:")
     print(f"     📊 Intervalo de velas: {INTERVALO_FIJO}s")
+    print(f"     📊 Máximo velas históricas: 15,000 (~10.4 días)")
     print(f"     🎯 Entrada SIEMPRE en HH:MM:00 (inicio de vela)")
     print(f"     🕐 Zona horaria del BROKER: UTC-6")
     print(f"     🔒 Confianza mínima: {CONFIANZA_MINIMA}%")
     print("     🔍 ESCANEA TODOS los activos OTC")
     print("     🏆 Encuentra el MEJOR activo para operar")
+    print("")
+    print("  🔧 CORRECCIONES APLICADAS:")
+    print("     ✅ PATCH para error get_digital_underlying_list_data")
+    print("     ✅ FORZADO a 60 segundos en velas live")
+    print("     ✅ OPTIMIZADO a 15,000 velas históricas")
     print("="*80)
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
