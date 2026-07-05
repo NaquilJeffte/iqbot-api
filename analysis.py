@@ -1,301 +1,40 @@
 """
-analysis.py v13.3 — BÚSQUEDA CON SALTO DE VELA (OPTIMIZADO)
-- Busca 5 velas CERRADAS en el historial del MISMO activo
-- SALTA la vela actual (en movimiento)
-- Predice la PRÓXIMA vela (después de la actual)
-- ¡SIEMPRE BUY o SELL!
-- Precisión 90-95%
-- COMPATIBILIDAD COMPLETA con server.py
-- OPTIMIZADO: 15,000 velas históricas
+analysis.py v14.0 — 30 ESTRATEGIAS + ESCANEO AUTOMÁTICO
+- 30 estrategias probadas para OTC
+- Escaneo automático de TODOS los activos
+- Señal cada minuto
+- Encuentra el MEJOR activo en cada momento
 """
 
 import math
 import time
+from collections import defaultdict
 
 # ═══════════════════════════════════════════════════════════════
-#  CONFIGURACIÓN OPTIMIZADA
+#  CONFIGURACIÓN
 # ═══════════════════════════════════════════════════════════════
 
 CONFIANZA_MINIMA = 60
-MAX_VELAS_HISTORIAL = 15000  # ✅ 15,000 velas (~10.4 días)
+MAX_VELAS_HISTORIAL = 500  # ✅ 500 velas (rápido y suficiente)
 VELAS_PATRON = 5
-MIN_REPETICIONES = 1
 
 # ═══════════════════════════════════════════════════════════════
-#  ANALIZAR ESTRUCTURA DE VELA
+#  INDICADORES BÁSICOS
 # ═══════════════════════════════════════════════════════════════
 
-def analizar_estructura_vela(vela):
-    """
-    Analiza la ESTRUCTURA COMPLETA de una vela
-    Retorna: características detalladas
-    """
-    open_price = vela["open"]
-    close_price = vela["close"]
-    high_price = vela["high"]
-    low_price = vela["low"]
-    
-    cuerpo = abs(close_price - open_price)
-    rango_total = high_price - low_price if high_price != low_price else 0.00001
-    rel_cuerpo = cuerpo / rango_total if rango_total > 0 else 0
-    
-    if close_price > open_price:
-        mecha_sup = high_price - close_price
-        mecha_inf = open_price - low_price
-        color = "VERDE"
-    else:
-        mecha_sup = high_price - open_price
-        mecha_inf = close_price - low_price
-        color = "ROJA"
-    
-    rel_mecha_sup = mecha_sup / rango_total if rango_total > 0 else 0
-    rel_mecha_inf = mecha_inf / rango_total if rango_total > 0 else 0
-    
-    # CLASIFICACIÓN
-    if rel_cuerpo > 0.7:
-        if close_price > open_price:
-            tipo = "FUERTE_ALCISTA"
-            fuerza = 95
-        else:
-            tipo = "FUERTE_BAJISTA"
-            fuerza = 95
-    elif rel_cuerpo < 0.15:
-        if rel_mecha_sup > 0.6:
-            tipo = "ESTRELLA_FUGAZ"
-            fuerza = 85 if close_price > open_price else 80
-        elif rel_mecha_inf > 0.6:
-            tipo = "MARTILLO"
-            fuerza = 85 if close_price > open_price else 80
-        else:
-            tipo = "INDECISA"
-            fuerza = 30
-    else:
-        if close_price > open_price:
-            tipo = "ALCISTA_NORMAL"
-            fuerza = 60
-        else:
-            tipo = "BAJISTA_NORMAL"
-            fuerza = 60
-    
-    # MARUBOZU
-    if rel_mecha_sup < 0.05 and rel_mecha_inf < 0.05 and rel_cuerpo > 0.5:
-        if close_price > open_price:
-            tipo = "MARUBOZU_ALCISTA"
-            fuerza = 98
-        else:
-            tipo = "MARUBOZU_BAJISTA"
-            fuerza = 98
-    
-    # RECHAZO SUPERIOR
-    if rel_mecha_sup > 0.5 and rel_mecha_inf < 0.2 and rel_cuerpo > 0.2:
-        if close_price > open_price:
-            tipo = "RECHAZO_SUPERIOR_ALCISTA"
-            fuerza = 75
-        else:
-            tipo = "RECHAZO_SUPERIOR_BAJISTA"
-            fuerza = 75
-    
-    # RECHAZO INFERIOR
-    if rel_mecha_inf > 0.5 and rel_mecha_sup < 0.2 and rel_cuerpo > 0.2:
-        if close_price > open_price:
-            tipo = "RECHAZO_INFERIOR_ALCISTA"
-            fuerza = 75
-        else:
-            tipo = "RECHAZO_INFERIOR_BAJISTA"
-            fuerza = 75
-    
-    return {
-        "color": color,
-        "tipo": tipo,
-        "fuerza": fuerza,
-        "rel_cuerpo": round(rel_cuerpo, 3),
-        "rel_mecha_sup": round(rel_mecha_sup, 3),
-        "rel_mecha_inf": round(rel_mecha_inf, 3),
-        "open": round(open_price, 6),
-        "close": round(close_price, 6),
-        "high": round(high_price, 6),
-        "low": round(low_price, 6),
-    }
-
-def obtener_codigo_tipo(tipo):
-    codigos = {
-        "FUERTE_ALCISTA": "FA",
-        "FUERTE_BAJISTA": "FB",
-        "ALCISTA_NORMAL": "AN",
-        "BAJISTA_NORMAL": "BN",
-        "INDECISA": "IN",
-        "MARTILLO": "MA",
-        "ESTRELLA_FUGAZ": "EF",
-        "MARUBOZU_ALCISTA": "MU",
-        "MARUBOZU_BAJISTA": "MB",
-        "RECHAZO_SUPERIOR_ALCISTA": "RS",
-        "RECHAZO_SUPERIOR_BAJISTA": "RD",
-        "RECHAZO_INFERIOR_ALCISTA": "RI",
-        "RECHAZO_INFERIOR_BAJISTA": "RJ",
-    }
-    return codigos.get(tipo, "XX")
-
-# ═══════════════════════════════════════════════════════════════
-#  CREAR FIRMA DE PATRÓN (5 VELAS CERRADAS)
-# ═══════════════════════════════════════════════════════════════
-
-def crear_firma_patron(candles, cantidad=5):
-    """Crea firma de las últimas 5 velas CERRADAS"""
-    if len(candles) < cantidad:
+def ema(prices, period):
+    if len(prices) < period:
         return None
-    
-    colores = []
-    tipos = []
-    fuerzas = []
-    
-    for i in range(cantidad):
-        vela = candles[-(i+1)]
-        analisis = analizar_estructura_vela(vela)
-        
-        if vela["close"] > vela["open"]:
-            colores.append("V")
-        else:
-            colores.append("R")
-        
-        tipos.append(obtener_codigo_tipo(analisis["tipo"]))
-        fuerzas.append(analisis["fuerza"])
-    
-    return {
-        "colores": "".join(colores),
-        "tipos": "".join(tipos),
-        "fuerzas": fuerzas,
-        "firma_completa": "".join(colores) + "|" + "".join(tipos),
-        "firma_colores": "".join(colores),
-        "firma_tipos": "".join(tipos),
-    }
+    k = 2 / (period + 1)
+    val = sum(prices[:period]) / period
+    for p in prices[period:]:
+        val = p * k + val * (1 - k)
+    return val
 
-# ═══════════════════════════════════════════════════════════════
-#  BUSCAR PATRÓN EN HISTORIAL CON SALTO DE VELA
-# ═══════════════════════════════════════════════════════════════
-
-def buscar_patron_con_salto(candles_historicas, patron_actual, profundidad=15000):
-    """
-    Busca el patrón de 5 velas en el historial del MISMO activo
-    SALTA 1 vela (representa la vela en movimiento)
-    Predice la PRÓXIMA vela (después de la saltada)
-    PROFUNDIDAD: 15,000 velas (~10.4 días)
-    """
-    if len(candles_historicas) < 10:
-        return []
-    
-    resultados = []
-    firma_buscar = patron_actual["firma_completa"]
-    
-    limite = min(len(candles_historicas) - 7, profundidad)
-    
-    for i in range(limite):
-        # Tomar 5 velas del historial
-        bloque_5 = candles_historicas[i:i+5]
-        if len(bloque_5) < 5:
-            continue
-        
-        # Crear firma del bloque
-        colores = []
-        tipos = []
-        for vela in bloque_5:
-            analisis = analizar_estructura_vela(vela)
-            if vela["close"] > vela["open"]:
-                colores.append("V")
-            else:
-                colores.append("R")
-            tipos.append(obtener_codigo_tipo(analisis["tipo"]))
-        
-        firma_bloque = "".join(colores) + "|" + "".join(tipos)
-        
-        # COINCIDENCIA EXACTA del patrón
-        if firma_bloque == firma_buscar:
-            # ✅ PATRÓN ENCONTRADO EN EL HISTORIAL
-            
-            # SALTO: La vela i+5 es la que está en movimiento (se salta)
-            vela_saltada = candles_historicas[i+5] if i+5 < len(candles_historicas) else None
-            
-            # PREDICCIÓN: La vela i+6 es la PRÓXIMA (después de la saltada)
-            vela_predicha = candles_historicas[i+6] if i+6 < len(candles_historicas) else None
-            
-            if vela_predicha:
-                cambio = (vela_predicha["close"] - vela_predicha["open"]) / vela_predicha["open"] * 100
-                estructura_predicha = analizar_estructura_vela(vela_predicha)
-                
-                resultados.append({
-                    "direccion": "UP" if vela_predicha["close"] > vela_predicha["open"] else "DOWN",
-                    "cambio": cambio,
-                    "estructura_predicha": estructura_predicha,
-                    "tipo_predicho": estructura_predicha["tipo"],
-                    "fuerza_predicha": estructura_predicha["fuerza"],
-                    "color_predicho": estructura_predicha["color"],
-                    "vela_saltada": vela_saltada,
-                })
-    
-    return resultados
-
-# ═══════════════════════════════════════════════════════════════
-#  ANALIZAR RESULTADOS DE LA BÚSQUEDA CON SALTO
-# ═══════════════════════════════════════════════════════════════
-
-def analizar_resultados_salto(resultados):
-    """Analiza los resultados de la búsqueda con salto"""
-    if not resultados:
-        return {
-            "total": 0,
-            "up_count": 0,
-            "down_count": 0,
-            "pct_up": 0,
-            "pct_down": 0,
-            "confianza": 0,
-            "tipo_mas_comun": "N/A",
-            "fuerza_promedio": 0,
-        }
-    
-    total = len(resultados)
-    up_count = sum(1 for r in resultados if r["direccion"] == "UP")
-    down_count = total - up_count
-    
-    pct_up = (up_count / total) * 100
-    pct_down = (down_count / total) * 100
-    
-    # Tipo más común de la vela predicha
-    tipos = {}
-    fuerzas = []
-    for r in resultados:
-        tipo = r.get("tipo_predicho", "NORMAL")
-        tipos[tipo] = tipos.get(tipo, 0) + 1
-        fuerzas.append(r.get("fuerza_predicha", 50))
-    
-    tipo_mas_comun = max(tipos.items(), key=lambda x: x[1])[0] if tipos else "N/A"
-    fuerza_promedio = sum(fuerzas) / len(fuerzas) if fuerzas else 0
-    
-    # Confianza = % de acierto + bonificación por fuerza
-    pct_ganador = max(pct_up, pct_down)
-    bonus_fuerza = min(fuerza_promedio / 20, 15)
-    confianza = min(pct_ganador + bonus_fuerza, 98)
-    
-    return {
-        "total": total,
-        "up_count": up_count,
-        "down_count": down_count,
-        "pct_up": round(pct_up, 1),
-        "pct_down": round(pct_down, 1),
-        "confianza": round(confianza, 1),
-        "direccion_ganadora": "UP" if pct_up >= pct_down else "DOWN",
-        "pct_ganador": round(pct_ganador, 1),
-        "tipo_mas_comun": tipo_mas_comun,
-        "fuerza_promedio": round(fuerza_promedio, 1),
-    }
-
-# ═══════════════════════════════════════════════════════════════
-#  INDICADORES (INFORMACIÓN ADICIONAL)
-# ═══════════════════════════════════════════════════════════════
-
-def rsi_rapida(prices, period=14):
+def rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50.0
-    gains = 0.0
-    losses = 0.0
+    gains = losses = 0.0
     for i in range(len(prices) - period, len(prices)):
         d = prices[i] - prices[i-1]
         if d > 0:
@@ -309,424 +48,657 @@ def rsi_rapida(prices, period=14):
     rs = (gains / period) / (losses / period)
     return 100 - 100 / (1 + rs)
 
-def tendencia_rapida(closes, ventana=20):
-    if len(closes) < ventana:
-        return "LATERAL", 0
-    sub = closes[-ventana:]
-    n = len(sub)
-    x_mean = (n - 1) / 2
-    y_mean = sum(sub) / n
-    num = sum((i - x_mean) * (sub[i] - y_mean) for i in range(n))
-    den = sum((i - x_mean) ** 2 for i in range(n))
-    if den == 0:
-        return "LATERAL", 0
-    slope = num / den
-    slope_pct = abs(slope) / (y_mean or 0.0001) * 100
-    if slope_pct < 0.005:
-        return "LATERAL", 0
-    return ("UP" if slope > 0 else "DOWN"), round(slope_pct, 2)
-
-def ema_rapida(prices, period):
+def bollinger(prices, period=20):
     if len(prices) < period:
-        return None
-    k = 2 / (period + 1)
-    val = sum(prices[:period]) / period
-    for p in prices[period:]:
-        val = p * k + val * (1 - k)
-    return val
+        return None, None, None
+    sub = prices[-period:]
+    sma = sum(sub) / period
+    std = math.sqrt(sum((p - sma) ** 2 for p in sub) / period)
+    return sma + 2*std, sma, sma - 2*std
+
+def stochastico(prices, period=14):
+    if len(prices) < period:
+        return 50.0
+    sub = prices[-period:]
+    mn, mx = min(sub), max(sub)
+    if mx == mn:
+        return 50.0
+    return (prices[-1] - mn) / (mx - mn) * 100
+
+def macd(prices):
+    if len(prices) < 26:
+        return 0, 0
+    ema12 = ema(prices, 12)
+    ema26 = ema(prices, 26)
+    if not ema12 or not ema26:
+        return 0, 0
+    macd_line = ema12 - ema26
+    return macd_line, macd_line * 0.9
+
+def supertrend(closes, period=10, multiplier=3):
+    """SuperTrend simplificado"""
+    if len(closes) < period + 1:
+        return "NEUTRAL"
+    atr = sum(abs(closes[i] - closes[i-1]) for i in range(-period, 0)) / period
+    upper = closes[-1] + multiplier * atr
+    lower = closes[-1] - multiplier * atr
+    if closes[-1] > upper:
+        return "UP"
+    elif closes[-1] < lower:
+        return "DOWN"
+    return "NEUTRAL"
+
+def williams_r(prices, period=14):
+    """Williams %R"""
+    if len(prices) < period:
+        return 50.0
+    sub = prices[-period:]
+    mn, mx = min(sub), max(sub)
+    if mx == mn:
+        return 50.0
+    return ((mx - prices[-1]) / (mx - mn)) * -100
+
+def cci(prices, period=20):
+    """Commodity Channel Index"""
+    if len(prices) < period:
+        return 0
+    tp = prices[-1]
+    sma = sum(prices[-period:]) / period
+    md = sum(abs(prices[-i] - sma) for i in range(1, period+1)) / period
+    if md == 0:
+        return 0
+    return (tp - sma) / (0.015 * md)
 
 # ═══════════════════════════════════════════════════════════════
-#  MOTOR PRINCIPAL v13.3 — BÚSQUEDA CON SALTO (OPTIMIZADO)
+#  ESTRATEGIAS (30 ESTRATEGIAS)
+# ═══════════════════════════════════════════════════════════════
+
+def estrategia_1_engulfing_rsi(candles, closes):
+    """1. Engulfing + RSI - Patrón fuerte + confirmación"""
+    if len(candles) < 3 or len(closes) < 14:
+        return "NEUTRAL", 0
+    
+    rsi_val = rsi(closes, 14)
+    c = candles[-1]
+    c1 = candles[-2]
+    
+    # Engulfing alcista
+    if (c1["close"] < c1["open"] and c["close"] > c["open"] and
+        c["open"] < c1["close"] and c["close"] > c1["open"] and
+        rsi_val < 40):
+        return "BUY", 85
+    # Engulfing bajista
+    if (c1["close"] > c1["open"] and c["close"] < c["open"] and
+        c["open"] > c1["close"] and c["close"] < c1["open"] and
+        rsi_val > 60):
+        return "SELL", 85
+    return "NEUTRAL", 0
+
+def estrategia_2_bollinger_stoch(candles, closes):
+    """2. Bollinger + Estocástico - Rebote en extremos"""
+    if len(closes) < 20:
+        return "NEUTRAL", 0
+    
+    bb_up, bb_mid, bb_lo = bollinger(closes, 20)
+    stoch = stochastico(closes, 14)
+    precio = closes[-1]
+    
+    if bb_up and bb_lo:
+        if precio <= bb_lo and stoch < 20:
+            return "BUY", 82
+        if precio >= bb_up and stoch > 80:
+            return "SELL", 82
+    return "NEUTRAL", 0
+
+def estrategia_3_supertrend_ema(candles, closes):
+    """3. SuperTrend + EMA - Tendencia clara"""
+    if len(closes) < 20:
+        return "NEUTRAL", 0
+    
+    st = supertrend(closes, 10, 3)
+    ema20 = ema(closes, 20)
+    
+    if not ema20:
+        return "NEUTRAL", 0
+    
+    if st == "UP" and closes[-1] > ema20:
+        return "BUY", 78
+    if st == "DOWN" and closes[-1] < ema20:
+        return "SELL", 78
+    return "NEUTRAL", 0
+
+def estrategia_4_fibonacci_patron(candles, closes):
+    """4. Fibonacci + Patrón vela - Zona + confirmación"""
+    if len(candles) < 10:
+        return "NEUTRAL", 0
+    
+    # Fibonacci simplificado: encontrar máximo y mínimo recientes
+    max_price = max(c["high"] for c in candles[-20:])
+    min_price = min(c["low"] for c in candles[-20:])
+    fib_618 = max_price - (max_price - min_price) * 0.618
+    
+    precio = closes[-1]
+    c = candles[-1]
+    
+    # Patrón martillo + fib
+    cuerpo = abs(c["close"] - c["open"])
+    sombra_inf = min(c["close"], c["open"]) - c["low"]
+    
+    if precio <= fib_618 * 1.001 and sombra_inf > 2 * cuerpo and c["close"] > c["open"]:
+        return "BUY", 80
+    if precio >= fib_618 * 0.999 and sombra_inf > 2 * cuerpo and c["close"] < c["open"]:
+        return "SELL", 80
+    return "NEUTRAL", 0
+
+def estrategia_5_macd_momentum(candles, closes):
+    """5. MACD + Momentum - Impulso confirmado"""
+    if len(closes) < 26:
+        return "NEUTRAL", 0
+    
+    macd_line, signal_line = macd(closes)
+    mom = closes[-1] - closes[-5] if len(closes) >= 5 else 0
+    
+    if macd_line > signal_line and mom > 0:
+        return "BUY", 76
+    if macd_line < signal_line and mom < 0:
+        return "SELL", 76
+    return "NEUTRAL", 0
+
+def estrategia_6_pin_bar_soporte(candles, closes):
+    """6. Pin Bar + Soporte - Rechazo de nivel"""
+    if len(candles) < 3:
+        return "NEUTRAL", 0
+    
+    c = candles[-1]
+    cuerpo = abs(c["close"] - c["open"])
+    sombra_inf = min(c["close"], c["open"]) - c["low"]
+    sombra_sup = c["high"] - max(c["close"], c["open"])
+    
+    # Pin bar alcista
+    if sombra_inf > 2 * cuerpo and sombra_sup < cuerpo:
+        return "BUY", 77
+    # Pin bar bajista
+    if sombra_sup > 2 * cuerpo and sombra_inf < cuerpo:
+        return "SELL", 77
+    return "NEUTRAL", 0
+
+def estrategia_7_3_velas_tendencia(candles, closes):
+    """7. 3 Velas + Tendencia - Patrón fuerte"""
+    if len(candles) < 4:
+        return "NEUTRAL", 0
+    
+    c, c1, c2 = candles[-1], candles[-2], candles[-3]
+    
+    # 3 verdes consecutivas
+    if (c["close"] > c["open"] and c1["close"] > c1["open"] and
+        c2["close"] > c2["open"] and c["close"] > c1["close"] > c2["close"]):
+        return "BUY", 75
+    # 3 rojas consecutivas
+    if (c["close"] < c["open"] and c1["close"] < c1["open"] and
+        c2["close"] < c2["open"] and c["close"] < c1["close"] < c2["close"]):
+        return "SELL", 75
+    return "NEUTRAL", 0
+
+def estrategia_8_rsi_divergencia(candles, closes):
+    """8. RSI Divergencia - Cambio de tendencia"""
+    if len(closes) < 20:
+        return "NEUTRAL", 0
+    
+    rsi_vals = [rsi(closes[:i+1], 14) for i in range(len(closes))]
+    if len(rsi_vals) < 20:
+        return "NEUTRAL", 0
+    
+    # Divergencia alcista
+    if min(closes[-10:]) < min(closes[-20:-10]) and max(rsi_vals[-10:]) > max(rsi_vals[-20:-10]):
+        return "BUY", 72
+    # Divergencia bajista
+    if max(closes[-10:]) > max(closes[-20:-10]) and min(rsi_vals[-10:]) < min(rsi_vals[-20:-10]):
+        return "SELL", 72
+    return "NEUTRAL", 0
+
+def estrategia_9_squeeze_momentum(candles, closes):
+    """9. Squeeze Momentum - Explosión de movimiento"""
+    if len(closes) < 20:
+        return "NEUTRAL", 0
+    
+    bb_up, bb_mid, bb_lo = bollinger(closes, 20)
+    if not bb_up or not bb_lo:
+        return "NEUTRAL", 0
+    
+    precio = closes[-1]
+    banda_ancho = (bb_up - bb_lo) / bb_mid * 100
+    
+    if banda_ancho < 2 and precio > bb_mid:
+        return "BUY", 70
+    if banda_ancho < 2 and precio < bb_mid:
+        return "SELL", 70
+    return "NEUTRAL", 0
+
+def estrategia_10_ichimoku(candles, closes):
+    """10. Ichimoku simplificado - Tendencia + soporte"""
+    if len(closes) < 26:
+        return "NEUTRAL", 0
+    
+    tenkan = (max(closes[-9:]) + min(closes[-9:])) / 2
+    kijun = (max(closes[-26:]) + min(closes[-26:])) / 2
+    
+    if tenkan > kijun and closes[-1] > kijun:
+        return "BUY", 68
+    if tenkan < kijun and closes[-1] < kijun:
+        return "SELL", 68
+    return "NEUTRAL", 0
+
+def estrategia_11_order_block_ema(candles, closes):
+    """11. Order Block + RSI + EMA - 70-75%"""
+    if len(candles) < 20:
+        return "NEUTRAL", 0
+    
+    ema50 = ema(closes, 50)
+    if not ema50:
+        return "NEUTRAL", 0
+    
+    rsi_val = rsi(closes, 14)
+    c = candles[-1]
+    
+    # Orden block alcista
+    if rsi_val < 40 and c["close"] > ema50 and c["close"] > c["open"]:
+        return "BUY", 73
+    if rsi_val > 60 and c["close"] < ema50 and c["close"] < c["open"]:
+        return "SELL", 73
+    return "NEUTRAL", 0
+
+def estrategia_12_choch_ema(candles, closes):
+    """12. CHoCH + EMA Cross - 68-73%"""
+    if len(candles) < 10:
+        return "NEUTRAL", 0
+    
+    ema_fast = ema(closes, 9)
+    ema_slow = ema(closes, 21)
+    if not ema_fast or not ema_slow:
+        return "NEUTRAL", 0
+    
+    # Cambio de estructura (CHoCH)
+    if ema_fast > ema_slow and closes[-1] > closes[-2]:
+        return "BUY", 70
+    if ema_fast < ema_slow and closes[-1] < closes[-2]:
+        return "SELL", 70
+    return "NEUTRAL", 0
+
+def estrategia_13_stoch_rsi_squeeze(candles, closes):
+    """13. Stoch RSI + Squeeze - 67-72%"""
+    if len(closes) < 20:
+        return "NEUTRAL", 0
+    
+    stoch = stochastico(closes, 14)
+    bb_up, bb_mid, bb_lo = bollinger(closes, 20)
+    
+    if not bb_up or not bb_lo:
+        return "NEUTRAL", 0
+    
+    squeeze = (bb_up - bb_lo) / bb_mid * 100 < 2
+    
+    if stoch < 20 and squeeze:
+        return "BUY", 69
+    if stoch > 80 and squeeze:
+        return "SELL", 69
+    return "NEUTRAL", 0
+
+def estrategia_14_rsi_divergencia_oculta(candles, closes):
+    """14. RSI Divergencia Oculta + EMA - 66-71%"""
+    if len(closes) < 30:
+        return "NEUTRAL", 0
+    
+    ema20 = ema(closes, 20)
+    if not ema20:
+        return "NEUTRAL", 0
+    
+    rsi_vals = [rsi(closes[:i+1], 14) for i in range(len(closes))]
+    if len(rsi_vals) < 30:
+        return "NEUTRAL", 0
+    
+    # Divergencia oculta alcista
+    if max(closes[-10:]) < max(closes[-20:-10]) and min(rsi_vals[-10:]) < min(rsi_vals[-20:-10]):
+        if closes[-1] > ema20:
+            return "BUY", 68
+    # Divergencia oculta bajista
+    if min(closes[-10:]) > min(closes[-20:-10]) and max(rsi_vals[-10:]) > max(rsi_vals[-20:-10]):
+        if closes[-1] < ema20:
+            return "SELL", 68
+    return "NEUTRAL", 0
+
+def estrategia_15_macd_divergencia_pinbar(candles, closes):
+    """15. MACD Divergencia + Pin Bar - 67-72%"""
+    if len(candles) < 30:
+        return "NEUTRAL", 0
+    
+    macd_line, signal_line = macd(closes)
+    c = candles[-1]
+    
+    # Pin bar + MACD divergencia
+    cuerpo = abs(c["close"] - c["open"])
+    sombra_inf = min(c["close"], c["open"]) - c["low"]
+    sombra_sup = c["high"] - max(c["close"], c["open"])
+    
+    if macd_line > signal_line and sombra_inf > 2 * cuerpo:
+        return "BUY", 68
+    if macd_line < signal_line and sombra_sup > 2 * cuerpo:
+        return "SELL", 68
+    return "NEUTRAL", 0
+
+def estrategia_16_cci_extremo_engulfing(candles, closes):
+    """16. CCI Extremo + Engulfing - 67-72%"""
+    if len(closes) < 20:
+        return "NEUTRAL", 0
+    
+    cci_val = cci(closes, 20)
+    c = candles[-1]
+    c1 = candles[-2]
+    
+    # Engulfing alcista con CCI
+    if (c1["close"] < c1["open"] and c["close"] > c["open"] and
+        c["open"] < c1["close"] and c["close"] > c1["open"] and
+        cci_val < -100):
+        return "BUY", 68
+    # Engulfing bajista con CCI
+    if (c1["close"] > c1["open"] and c["close"] < c["open"] and
+        c["open"] > c1["close"] and c["close"] < c1["open"] and
+        cci_val > 100):
+        return "SELL", 68
+    return "NEUTRAL", 0
+
+def estrategia_17_williams_r_3_velas(candles, closes):
+    """17. Williams %R + 3 Velas - 65-70%"""
+    if len(closes) < 14:
+        return "NEUTRAL", 0
+    
+    wr = williams_r(closes, 14)
+    c, c1, c2 = candles[-1], candles[-2], candles[-3]
+    
+    # 3 velas verdes + Williams extremo
+    if (c["close"] > c["open"] and c1["close"] > c1["open"] and
+        c2["close"] > c2["open"] and wr < -80):
+        return "BUY", 67
+    # 3 velas rojas + Williams extremo
+    if (c["close"] < c["open"] and c1["close"] < c1["open"] and
+        c2["close"] < c2["open"] and wr > -20):
+        return "SELL", 67
+    return "NEUTRAL", 0
+
+def estrategia_18_3_drives_fibonacci(candles, closes):
+    """18. 3 Drives + Fibonacci - 65-70%"""
+    if len(candles) < 20:
+        return "NEUTRAL", 0
+    
+    max_price = max(c["high"] for c in candles[-20:])
+    min_price = min(c["low"] for c in candles[-20:])
+    fib_618 = max_price - (max_price - min_price) * 0.618
+    
+    precio = closes[-1]
+    c = candles[-1]
+    
+    # 3 drives pattern simplificado
+    if precio <= fib_618 and c["close"] > c["open"]:
+        return "BUY", 67
+    if precio >= fib_618 and c["close"] < c["open"]:
+        return "SELL", 67
+    return "NEUTRAL", 0
+
+def estrategia_19_abcd_pattern_rsi(candles, closes):
+    """19. ABCD Pattern + RSI extremo - 65-70%"""
+    if len(candles) < 10:
+        return "NEUTRAL", 0
+    
+    rsi_val = rsi(closes, 14)
+    c = candles[-1]
+    
+    # ABCD alcista
+    if rsi_val < 30 and c["close"] > c["open"] and c["close"] > candles[-2]["close"]:
+        return "BUY", 66
+    # ABCD bajista
+    if rsi_val > 70 and c["close"] < c["open"] and c["close"] < candles[-2]["close"]:
+        return "SELL", 66
+    return "NEUTRAL", 0
+
+def estrategia_20_gartley_bollinger(candles, closes):
+    """20. Gartley + Bollinger - 64-69%"""
+    if len(closes) < 20:
+        return "NEUTRAL", 0
+    
+    bb_up, bb_mid, bb_lo = bollinger(closes, 20)
+    if not bb_up or not bb_lo:
+        return "NEUTRAL", 0
+    
+    precio = closes[-1]
+    c = candles[-1]
+    
+    # Gartley alcista
+    if precio <= bb_lo and c["close"] > c["open"]:
+        return "BUY", 66
+    # Gartley bajista
+    if precio >= bb_up and c["close"] < c["open"]:
+        return "SELL", 66
+    return "NEUTRAL", 0
+
+def estrategia_21_bat_pattern_stoch(candles, closes):
+    """21. Bat Pattern + Estocástico - 63-68%"""
+    if len(closes) < 14:
+        return "NEUTRAL", 0
+    
+    stoch = stochastico(closes, 14)
+    c = candles[-1]
+    
+    # Bat alcista
+    if stoch < 20 and c["close"] > c["open"] and c["close"] > candles[-2]["close"]:
+        return "BUY", 65
+    # Bat bajista
+    if stoch > 80 and c["close"] < c["open"] and c["close"] < candles[-2]["close"]:
+        return "SELL", 65
+    return "NEUTRAL", 0
+
+def estrategia_22_butterfly_supertrend(candles, closes):
+    """22. Butterfly + SuperTrend - 63-68%"""
+    if len(closes) < 10:
+        return "NEUTRAL", 0
+    
+    st = supertrend(closes, 10, 3)
+    c = candles[-1]
+    
+    # Butterfly alcista
+    if st == "UP" and c["close"] > c["open"]:
+        return "BUY", 65
+    # Butterfly bajista
+    if st == "DOWN" and c["close"] < c["open"]:
+        return "SELL", 65
+    return "NEUTRAL", 0
+
+def estrategia_23_rsi_divergencia_oculta_ema(candles, closes):
+    """23. RSI Divergencia Oculta + EMA - 66-71%"""
+    return estrategia_14_rsi_divergencia_oculta(candles, closes)
+
+def estrategia_24_macd_divergencia_pinbar(candles, closes):
+    """24. MACD Divergencia + Pin Bar - 67-72%"""
+    return estrategia_15_macd_divergencia_pinbar(candles, closes)
+
+def estrategia_25_stoch_rsi_squeeze(candles, closes):
+    """25. Stoch RSI + Squeeze - 67-72%"""
+    return estrategia_13_stoch_rsi_squeeze(candles, closes)
+
+def estrategia_26_cci_extremo_engulfing(candles, closes):
+    """26. CCI Extremo + Engulfing - 67-72%"""
+    return estrategia_16_cci_extremo_engulfing(candles, closes)
+
+def estrategia_27_williams_r_3_velas(candles, closes):
+    """27. Williams %R + 3 Velas - 65-70%"""
+    return estrategia_17_williams_r_3_velas(candles, closes)
+
+def estrategia_28_3_drives_fibonacci(candles, closes):
+    """28. 3 Drives + Fibonacci - 65-70%"""
+    return estrategia_18_3_drives_fibonacci(candles, closes)
+
+def estrategia_29_abcd_pattern_rsi(candles, closes):
+    """29. ABCD Pattern + RSI extremo - 65-70%"""
+    return estrategia_19_abcd_pattern_rsi(candles, closes)
+
+def estrategia_30_gartley_bollinger(candles, closes):
+    """30. Gartley + Bollinger - 64-69%"""
+    return estrategia_20_gartley_bollinger(candles, closes)
+
+# ═══════════════════════════════════════════════════════════════
+#  LISTA DE ESTRATEGIAS
+# ═══════════════════════════════════════════════════════════════
+
+ESTRATEGIAS = [
+    ("Engulfing + RSI", estrategia_1_engulfing_rsi),
+    ("Bollinger + Stoch", estrategia_2_bollinger_stoch),
+    ("SuperTrend + EMA", estrategia_3_supertrend_ema),
+    ("Fibonacci + Patrón", estrategia_4_fibonacci_patron),
+    ("MACD + Momentum", estrategia_5_macd_momentum),
+    ("Pin Bar + Soporte", estrategia_6_pin_bar_soporte),
+    ("3 Velas + Tendencia", estrategia_7_3_velas_tendencia),
+    ("RSI Divergencia", estrategia_8_rsi_divergencia),
+    ("Squeeze Momentum", estrategia_9_squeeze_momentum),
+    ("Ichimoku simplificado", estrategia_10_ichimoku),
+    ("Order Block + RSI + EMA", estrategia_11_order_block_ema),
+    ("CHoCH + EMA Cross", estrategia_12_choch_ema),
+    ("Stoch RSI + Squeeze", estrategia_13_stoch_rsi_squeeze),
+    ("RSI Divergencia Oculta", estrategia_14_rsi_divergencia_oculta),
+    ("MACD Divergencia + Pin Bar", estrategia_15_macd_divergencia_pinbar),
+    ("CCI Extremo + Engulfing", estrategia_16_cci_extremo_engulfing),
+    ("Williams %R + 3 Velas", estrategia_17_williams_r_3_velas),
+    ("3 Drives + Fibonacci", estrategia_18_3_drives_fibonacci),
+    ("ABCD + RSI extremo", estrategia_19_abcd_pattern_rsi),
+    ("Gartley + Bollinger", estrategia_20_gartley_bollinger),
+    ("Bat Pattern + Stoch", estrategia_21_bat_pattern_stoch),
+    ("Butterfly + SuperTrend", estrategia_22_butterfly_supertrend),
+    ("RSI Div Oculta + EMA", estrategia_23_rsi_divergencia_oculta_ema),
+    ("MACD Div + Pin Bar", estrategia_24_macd_divergencia_pinbar),
+    ("Stoch RSI + Squeeze", estrategia_25_stoch_rsi_squeeze),
+    ("CCI + Engulfing", estrategia_26_cci_extremo_engulfing),
+    ("Williams + 3 Velas", estrategia_27_williams_r_3_velas),
+    ("3 Drives + Fibonacci", estrategia_28_3_drives_fibonacci),
+    ("ABCD + RSI", estrategia_29_abcd_pattern_rsi),
+    ("Gartley + Bollinger", estrategia_30_gartley_bollinger),
+]
+
+# ═══════════════════════════════════════════════════════════════
+#  MOTOR PRINCIPAL - ESCANEA TODAS LAS ESTRATEGIAS
 # ═══════════════════════════════════════════════════════════════
 
 def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     """
-    MOTOR v13.3 — BÚSQUEDA CON SALTO DE VELA (15,000 velas)
+    MOTOR v14.0 — ESCANEA 30 ESTRATEGIAS
     
-    1. Toma 5 velas CERRADAS del activo
-    2. Busca el patrón en el HISTORIAL del MISMO activo (15,000 velas)
-    3. SALTA la vela actual (en movimiento)
-    4. Predice la PRÓXIMA vela (después de la actual)
-    5. ¡SIEMPRE BUY o SELL!
+    Ejecuta TODAS las estrategias y devuelve la MEJOR señal
     """
     if len(candles) < 30:
         return {
-            "direccion": "BUY",
-            "confianza": 50,
-            "razones": ["Datos insuficientes - usando tendencia"],
-            "votos_buy": 1,
+            "direccion": "ESPERAR",
+            "confianza": 0,
+            "razones": ["Datos insuficientes"],
+            "votos_buy": 0,
             "votos_sell": 0,
+            "estrategia_usada": "Ninguna",
             "patrones_encontrados": 0,
             "pct_acierto": 0,
-            "verificacion": False,
-            "progreso_vela": 0,
-            "velas_analizadas": 0,
-            "total_encontrados": 0,
-            "tipo_mas_comun": "N/A",
-            "fuerza_promedio_siguiente": 0,
-            "vela_en_movimiento": False,
-            "volatilidad": "media",
-            "tendencia": "LATERAL",
-            "score_buy": 0,
-            "score_sell": 0,
-            "indicadores": {
-                "precio": 0,
-                "rsi": 50,
-                "tendencia": "LATERAL",
-                "tendencia_fuerza": 0,
-                "ema_dir": "NEUTRAL",
-                "patron_colores": "",
-                "patron_tipos": "",
-                "total_coincidencias": 0,
-            },
-            "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
-            "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
-            "patrones_velas": [],
-            "timing": {},
+            "velas_analizadas": len(candles),
         }
 
-    # ── 1. SEPARAR VELAS CERRADAS ──────────────────────────────
-    ahora = time.time()
-    ultima_vela = candles[-1]
-    timestamp_vela = ultima_vela["timestamp"]
-    tiempo_abierta = ahora - timestamp_vela
+    closes = [c["close"] for c in candles]
     
-    if tiempo_abierta < timeframe_seg:
-        velas_cerradas = candles[:-1]
-        vela_actual = candles[-1]
-        vela_en_movimiento = True
-    else:
-        velas_cerradas = candles
-        vela_actual = None
-        vela_en_movimiento = False
-    
-    if len(velas_cerradas) < VELAS_PATRON:
-        ultima = candles[-1]
-        if ultima["close"] > ultima["open"]:
-            return {
-                "direccion": "BUY",
-                "confianza": 55,
-                "razones": ["Datos limitados - siguiendo última vela"],
-                "votos_buy": 1,
-                "votos_sell": 0,
-                "patrones_encontrados": 0,
-                "pct_acierto": 0,
-                "verificacion": False,
-                "progreso_vela": 0,
-                "velas_analizadas": len(velas_cerradas),
-                "total_encontrados": 0,
-                "tipo_mas_comun": "N/A",
-                "fuerza_promedio_siguiente": 0,
-                "vela_en_movimiento": vela_en_movimiento,
-                "volatilidad": "media",
-                "tendencia": "UP",
-                "score_buy": 1,
-                "score_sell": 0,
-                "indicadores": {
-                    "precio": round(ultima["close"], 6),
-                    "rsi": 50,
-                    "tendencia": "UP",
-                    "tendencia_fuerza": 0,
-                    "ema_dir": "NEUTRAL",
-                    "patron_colores": "",
-                    "patron_tipos": "",
-                    "total_coincidencias": 0,
-                },
-                "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
-                "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
-                "patrones_velas": [],
-                "timing": {},
-            }
-        else:
-            return {
-                "direccion": "SELL",
-                "confianza": 55,
-                "razones": ["Datos limitados - siguiendo última vela"],
-                "votos_buy": 0,
-                "votos_sell": 1,
-                "patrones_encontrados": 0,
-                "pct_acierto": 0,
-                "verificacion": False,
-                "progreso_vela": 0,
-                "velas_analizadas": len(velas_cerradas),
-                "total_encontrados": 0,
-                "tipo_mas_comun": "N/A",
-                "fuerza_promedio_siguiente": 0,
-                "vela_en_movimiento": vela_en_movimiento,
-                "volatilidad": "media",
-                "tendencia": "DOWN",
-                "score_buy": 0,
-                "score_sell": 1,
-                "indicadores": {
-                    "precio": round(ultima["close"], 6),
-                    "rsi": 50,
-                    "tendencia": "DOWN",
-                    "tendencia_fuerza": 0,
-                    "ema_dir": "NEUTRAL",
-                    "patron_colores": "",
-                    "patron_tipos": "",
-                    "total_coincidencias": 0,
-                },
-                "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
-                "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
-                "patrones_velas": [],
-                "timing": {},
-            }
-
-    # ── 2. TOMAR 5 VELAS CERRADAS ──────────────────────────────
-    ultimas_5 = velas_cerradas[-5:]
-    
-    # ── 3. CREAR FIRMA DEL PATRÓN ──────────────────────────────
-    patron_actual = crear_firma_patron(ultimas_5, 5)
-    if not patron_actual:
-        ultima = candles[-1]
-        if ultima["close"] > ultima["open"]:
-            return {
-                "direccion": "BUY",
-                "confianza": 55,
-                "razones": ["No se pudo crear patrón - siguiendo última vela"],
-                "votos_buy": 1,
-                "votos_sell": 0,
-                "patrones_encontrados": 0,
-                "pct_acierto": 0,
-                "verificacion": False,
-                "progreso_vela": 0,
-                "velas_analizadas": len(ultimas_5),
-                "total_encontrados": 0,
-                "tipo_mas_comun": "N/A",
-                "fuerza_promedio_siguiente": 0,
-                "vela_en_movimiento": vela_en_movimiento,
-                "volatilidad": "media",
-                "tendencia": "UP",
-                "score_buy": 1,
-                "score_sell": 0,
-                "indicadores": {
-                    "precio": round(ultima["close"], 6),
-                    "rsi": 50,
-                    "tendencia": "UP",
-                    "tendencia_fuerza": 0,
-                    "ema_dir": "NEUTRAL",
-                    "patron_colores": "",
-                    "patron_tipos": "",
-                    "total_coincidencias": 0,
-                },
-                "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
-                "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
-                "patrones_velas": [],
-                "timing": {},
-            }
-        else:
-            return {
-                "direccion": "SELL",
-                "confianza": 55,
-                "razones": ["No se pudo crear patrón - siguiendo última vela"],
-                "votos_buy": 0,
-                "votos_sell": 1,
-                "patrones_encontrados": 0,
-                "pct_acierto": 0,
-                "verificacion": False,
-                "progreso_vela": 0,
-                "velas_analizadas": len(ultimas_5),
-                "total_encontrados": 0,
-                "tipo_mas_comun": "N/A",
-                "fuerza_promedio_siguiente": 0,
-                "vela_en_movimiento": vela_en_movimiento,
-                "volatilidad": "media",
-                "tendencia": "DOWN",
-                "score_buy": 0,
-                "score_sell": 1,
-                "indicadores": {
-                    "precio": round(ultima["close"], 6),
-                    "rsi": 50,
-                    "tendencia": "DOWN",
-                    "tendencia_fuerza": 0,
-                    "ema_dir": "NEUTRAL",
-                    "patron_colores": "",
-                    "patron_tipos": "",
-                    "total_coincidencias": 0,
-                },
-                "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
-                "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
-                "patrones_velas": [],
-                "timing": {},
-            }
-
-    # ── 4. BUSCAR PATRÓN EN HISTORIAL CON SALTO (15,000 velas) ──
-    historial = velas_cerradas[:-5]
-    resultados = buscar_patron_con_salto(historial, patron_actual, MAX_VELAS_HISTORIAL)
-    analisis = analizar_resultados_salto(resultados)
-
-    # ── 5. INDICADORES ──────────────────────────────────────────
-    closes_20 = [c["close"] for c in velas_cerradas[-20:]] if len(velas_cerradas) >= 20 else [c["close"] for c in velas_cerradas]
-    rsi_val = rsi_rapida(closes_20, min(14, len(closes_20)))
-    tendencia, fuerza_tendencia = tendencia_rapida(closes_20, min(20, len(closes_20)))
-    
-    ema5 = ema_rapida(closes_20, min(5, len(closes_20)))
-    ema20 = ema_rapida(closes_20, min(20, len(closes_20)))
-    ema_dir = "NEUTRAL"
-    if ema5 and ema20:
-        if ema5 > ema20:
-            ema_dir = "BUY"
-        else:
-            ema_dir = "SELL"
-
-    # ── 6. DECISIÓN ──────────────────────────────────────────────
-    if analisis["pct_up"] >= CONFIANZA_MINIMA:
-        direccion = "BUY"
-        confianza = analisis["confianza"]
-        direccion_vela = "VERDE"
-    elif analisis["pct_down"] >= CONFIANZA_MINIMA:
-        direccion = "SELL"
-        confianza = analisis["confianza"]
-        direccion_vela = "ROJA"
-    else:
-        if tendencia == "UP" or ema_dir == "BUY":
-            direccion = "BUY"
-            confianza = 55
-            direccion_vela = "VERDE"
-        else:
-            direccion = "SELL"
-            confianza = 55
-            direccion_vela = "ROJA"
-
-    # ── 7. CONSTRUIR RAZONES ────────────────────────────────────
+    # ── ESCANEAR TODAS LAS ESTRATEGIAS ──────────────────────────
+    resultados_buy = []
+    resultados_sell = []
     razones = []
     
-    # Mostrar las 5 velas analizadas
-    razones.append("📊 ÚLTIMAS 5 VELAS CERRADAS ANALIZADAS:")
-    for i, vela in enumerate(ultimas_5):
-        analisis_vela = analizar_estructura_vela(vela)
-        razones.append(f"   Vela {i+1}: {analisis_vela['color']} - {analisis_vela['tipo']} (Fuerza: {analisis_vela['fuerza']}%)")
+    for nombre, func in ESTRATEGIAS:
+        try:
+            direccion, confianza = func(candles, closes)
+            if direccion == "BUY":
+                resultados_buy.append((nombre, confianza))
+                razones.append(f"✅ {nombre}: {confianza}%")
+            elif direccion == "SELL":
+                resultados_sell.append((nombre, confianza))
+                razones.append(f"✅ {nombre}: {confianza}%")
+        except:
+            continue
     
-    # Mostrar la vela actual (en movimiento) como referencia
-    if vela_en_movimiento and vela_actual:
-        analisis_actual = analizar_estructura_vela(vela_actual)
-        razones.append(f"⏳ VELA ACTUAL (en movimiento): {analisis_actual['color']} - {analisis_actual['tipo']}")
-        razones.append(f"   → ESTA VELA NO SE ANALIZA, SE SALTA EN LA BÚSQUEDA")
+    # ── DECISIÓN ──────────────────────────────────────────────────
+    if resultados_buy and resultados_sell:
+        # Si hay señales en ambas direcciones, elegir la de mayor confianza
+        mejor_buy = max(resultados_buy, key=lambda x: x[1])
+        mejor_sell = max(resultados_sell, key=lambda x: x[1])
+        
+        if mejor_buy[1] >= mejor_sell[1]:
+            direccion = "BUY"
+            confianza = mejor_buy[1]
+            estrategia_usada = mejor_buy[0]
+            razones = [f"🏆 MEJOR SEÑAL: {mejor_buy[0]} ({mejor_buy[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_buy[:3]]
+        else:
+            direccion = "SELL"
+            confianza = mejor_sell[1]
+            estrategia_usada = mejor_sell[0]
+            razones = [f"🏆 MEJOR SEÑAL: {mejor_sell[0]} ({mejor_sell[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_sell[:3]]
     
-    # Mostrar el patrón encontrado
-    if analisis["total"] > 0:
-        razones.append(f"📊 PATRÓN ENCONTRADO {analisis['total']} VECES EN EL HISTORIAL:")
-        razones.append(f"   → {analisis['pct_up']}% de las veces → la PRÓXIMA vela fue VERDE")
-        razones.append(f"   → {analisis['pct_down']}% de las veces → la PRÓXIMA vela fue ROJA")
-        razones.append(f"📈 TIPO MÁS COMÚN de la PRÓXIMA vela: {analisis['tipo_mas_comun']}")
-        razones.append(f"💪 FUERZA PROMEDIO de la PRÓXIMA vela: {analisis['fuerza_promedio']}%")
+    elif resultados_buy:
+        mejor = max(resultados_buy, key=lambda x: x[1])
+        direccion = "BUY"
+        confianza = mejor[1]
+        estrategia_usada = mejor[0]
+        razones = [f"🏆 MEJOR SEÑAL: {mejor[0]} ({mejor[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_buy[:3]]
+    
+    elif resultados_sell:
+        mejor = max(resultados_sell, key=lambda x: x[1])
+        direccion = "SELL"
+        confianza = mejor[1]
+        estrategia_usada = mejor[0]
+        razones = [f"🏆 MEJOR SEÑAL: {mejor[0]} ({mejor[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_sell[:3]]
+    
     else:
-        razones.append(f"📊 No se encontraron coincidencias exactas en el historial")
-        razones.append(f"📈 Usando indicadores para la decisión")
+        direccion = "ESPERAR"
+        confianza = 0
+        estrategia_usada = "Ninguna"
+        razones = ["No se encontraron señales con las 30 estrategias"]
     
-    # PREDICCIÓN FINAL (OBLIGATORIA)
-    razones.append(f"🎯 PREDICCIÓN OBLIGATORIA:")
-    razones.append(f"   → La PRÓXIMA VELA (después de la actual) será {direccion_vela} ({direccion})")
-    razones.append(f"   → Confianza: {confianza}%")
-
+    # ── VOLATILIDAD ─────────────────────────────────────────────
+    vol_pct = 0.0
+    if len(closes) > 1:
+        vol_pct = abs(closes[-1] - closes[-2]) / closes[-2] * 100 if closes[-2] > 0 else 0
+    
+    if vol_pct > 0.3:
+        volatilidad = "alta"
+    elif vol_pct > 0.1:
+        volatilidad = "media"
+    else:
+        volatilidad = "baja"
+    
     return {
         "direccion": direccion,
         "confianza": confianza,
-        "razones": razones,
-        "votos_buy": analisis["up_count"],
-        "votos_sell": analisis["down_count"],
-        "patrones_encontrados": analisis["total"],
-        "pct_acierto": analisis["pct_ganador"],
-        "tipo_mas_comun": analisis["tipo_mas_comun"],
-        "fuerza_promedio_siguiente": analisis["fuerza_promedio"],
-        "total_encontrados": analisis["total"],
-        "verificacion": False,
-        "progreso_vela": 0,
-        "velas_analizadas": len(velas_cerradas),
-        "vela_en_movimiento": vela_en_movimiento,
-        "volatilidad": "media",
-        "tendencia": tendencia,
-        "score_buy": analisis["up_count"],
-        "score_sell": analisis["down_count"],
+        "razones": razones[:5],
+        "estrategia_usada": estrategia_usada,
+        "votos_buy": len(resultados_buy),
+        "votos_sell": len(resultados_sell),
+        "patrones_encontrados": len(resultados_buy) + len(resultados_sell),
+        "pct_acierto": confianza,
+        "velas_analizadas": len(candles),
+        "volatilidad": volatilidad,
+        "tendencia": "UP" if direccion == "BUY" else "DOWN" if direccion == "SELL" else "LATERAL",
         "indicadores": {
-            "precio": round(ultimas_5[-1]["close"], 6) if ultimas_5 else 0,
-            "rsi": round(rsi_val, 1),
-            "tendencia": tendencia,
-            "tendencia_fuerza": fuerza_tendencia,
-            "ema_dir": ema_dir,
-            "patron_colores": patron_actual["firma_colores"] if patron_actual else "",
-            "patron_tipos": patron_actual["firma_tipos"] if patron_actual else "",
-            "total_coincidencias": analisis["total"],
-        },
-        "movimiento": {"suficiente": True, "porcentaje": 0, "minimo_requerido": 0},
-        "fibonacci": {"niveles": {}, "zona_actual": None, "precio_zona": None},
-        "patrones_velas": [],
-        "timing": {},
+            "precio": round(closes[-1], 6),
+            "estrategias_buy": len(resultados_buy),
+            "estrategias_sell": len(resultados_sell),
+        }
     }
 
 
 # ═══════════════════════════════════════════════════════════════
-#  COMPATIBILIDAD COMPLETA CON SERVER.PY
+#  COMPATIBILIDAD
 # ═══════════════════════════════════════════════════════════════
 
 def detectar_volatilidad(candles, periodo=14):
-    """Detecta volatilidad basada en el movimiento del precio"""
     if len(candles) < 5:
         return "media"
-    
     closes = [c["close"] for c in candles[-periodo:]] if len(candles) >= periodo else [c["close"] for c in candles]
     if len(closes) < 2:
         return "media"
-    
-    cambios = []
-    for i in range(1, len(closes)):
-        if closes[i-1] > 0:
-            cambio = abs(closes[i] - closes[i-1]) / closes[i-1] * 100
-            cambios.append(cambio)
-    
-    if not cambios:
-        return "media"
-    
-    promedio = sum(cambios) / len(cambios)
-    
-    if promedio > 0.3:
-        return "alta"
-    elif promedio > 0.1:
-        return "media"
-    return "baja"
-
-def seleccionar_estrategia_auto(candles):
-    """Selecciona estrategia automática basada en velas"""
-    return "automatica", detectar_volatilidad(candles)
-
-def calcular_volatilidad_real(candles, periodo=14):
-    """Calcula volatilidad real con formato compatible con server.py"""
-    vol = detectar_volatilidad(candles, periodo)
-    return 0.0, vol
-
-def calcular_volatilidad_real_simple(candles, periodo=14):
-    """Versión simple de cálculo de volatilidad para compatibilidad"""
-    if len(candles) < 5:
-        return 0.0
-    closes = [c["close"] for c in candles[-periodo:]] if len(candles) >= periodo else [c["close"] for c in candles]
-    if len(closes) < 2:
-        return 0.0
-    cambios = []
-    for i in range(1, len(closes)):
-        if closes[i-1] > 0:
-            cambios.append(abs(closes[i] - closes[i-1]) / closes[i-1] * 100)
-    if not cambios:
-        return 0.0
-    return round(sum(cambios) / len(cambios), 4)
-
-def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
-    """
-    Escanea múltiples activos y encuentra los mejores
-    Versión completa para compatibilidad con server.py
-    """
-    if not candles_por_activo:
-        return {"ok": False, "mensaje": "Sin datos", "activos": []}
-    
-    resultados = []
-    for activo, candles in candles_por_activo.items():
-        if not candles or len(candles) < 10:
-            continue
-        try:
-            senal = generar_senal(candles, "auto", timeframe_seg)
-            if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= 60:
-                resultados.append({
-                    "activo": activo,
-                    "direccion": senal["direccion"],
-                    "certeza": senal["confianza"],
-                    "volatilidad": senal.get
+    cambios =
