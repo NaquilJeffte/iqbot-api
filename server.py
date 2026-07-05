@@ -1,10 +1,10 @@
 """
-server.py — IQ Option Bot API v15.1
-- PREDICCIÓN CON 1 VELA + 1 CONFIRMACIÓN FLEXIBLE
-- Analiza SOLO la última vela CERRADA
-- Busca esa vela en el historial (1000 velas)
-- CONFIRMA 1 VEZ (flexible: color + tipo)
-- Predice cómo terminará la vela EN MOVIMIENTO
+server.py — IQ Option Bot API v16.0
+- ESTRATEGIA COMBINADA: Price Action + Tendencia Inteligente
+- 50% Price Action (Soportes/Resistencias + Patrones)
+- 50% Tendencia Inteligente (EMA + ADX + RSI)
+- Solo opera cuando ambas estrategias están alineadas
+- Puntuación combinada >= 80
 - 10 ACTIVOS OBLIGATORIOS SIEMPRE VISIBLES
 - CORRECCIÓN DE TICKERS ALTERNATIVOS
 - PATCH CORREGIDO PARA ERROR get_digital_underlying_list_data
@@ -47,11 +47,11 @@ CORS(app, origins="*", allow_headers=["Content-Type","Accept","Authorization","X
 
 # ── CONFIGURACIÓN ─────────────────────────────────────────────────
 BROKER_TIMEZONE = timezone(timedelta(hours=-6))
-CONFIANZA_MINIMA = 55
+CONFIANZA_MINIMA = 80  # ✅ PUNTAJE MÍNIMO 80%
 INTERVALO_FIJO = 60
-VELAS_PARA_ANALISIS = 1000
+VELAS_PARA_ANALISIS = 300  # ✅ 300 velas para soportes/resistencias
 MAX_ACTIVOS_ESCANEAR = 999
-CONFIRMACIONES_REQUERIDAS = 1  # ✅ SOLO 1 CONFIRMACIÓN FLEXIBLE
+PUNTAJE_MINIMO = 80
 
 # ── 10 ACTIVOS OBLIGATORIOS ────────────────────────────────────
 ACTIVOS_OBLIGATORIOS = [
@@ -320,19 +320,23 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api": "IQ Option Bot API",
-        "version": "15.1",
+        "version": "16.0",
         "estado": "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
         "confianza_minima": CONFIANZA_MINIMA,
-        "confirmaciones_requeridas": CONFIRMACIONES_REQUERIDAS,
-        "analisis": "1_vela_1_confirmacion_flexible",
+        "puntaje_minimo": PUNTAJE_MINIMO,
+        "analisis": "combinada_price_action_tendencia",
         "max_velas_historicas": VELAS_PARA_ANALISIS,
         "activos_obligatorios": len(ACTIVOS_OBLIGATORIOS),
         "duraciones": DURACIONES,
         "patch_aplicado": "name_mangling_correcto",
+        "estrategias": [
+            "Price Action + Soportes/Resistencias (50%)",
+            "Tendencia Inteligente - EMA+ADX+RSI (50%)"
+        ],
     })
 
 @app.route("/iq/ping")
@@ -345,7 +349,7 @@ def ping():
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
-        "version": "15.1",
+        "version": "16.0",
         "timestamp": int(time.time()),
     })
 
@@ -531,7 +535,7 @@ def velas_stop():
 @app.route("/iq/senal", methods=["POST"])
 @requiere_conexion
 def senal():
-    """Señal para un activo específico - 1 vela + 1 confirmación flexible"""
+    """Señal para un activo específico - Estrategia Combinada"""
     api = sesion["api"]
     body = request.get_json(force=True)
 
@@ -546,11 +550,12 @@ def senal():
             return jsonify({"error": f"Sin velas para {activo}"}), 404
 
         candles = [raw_a_vela(c) for c in raw]
-        resultado = generar_senal(candles, "1_vela", intervalo)
+        resultado = generar_senal(candles, "combinada", intervalo)
 
         confianza = resultado.get("confianza", 0)
-        confirmado = resultado.get("confirmado", False)
-        confirmaciones = resultado.get("confirmaciones", 0)
+        score_pa = resultado.get("score_price_action", 0)
+        score_ti = resultado.get("score_tendencia_inteligente", 0)
+        puntaje_combinado = resultado.get("puntaje_combinado", 0)
 
         # ── TIMING PERFECTO ──────────────────────────────────────
         ahora_ts = time.time()
@@ -587,7 +592,7 @@ def senal():
         es_valida = (
             resultado["direccion"] in ("BUY", "SELL") and
             confianza >= CONFIANZA_MINIMA and
-            confirmado
+            puntaje_combinado >= PUNTAJE_MINIMO
         )
 
         if not es_valida:
@@ -601,9 +606,10 @@ def senal():
             "es_otc": "OTC" in activo,
             "senal": resultado["direccion"],
             "confianza": confianza if es_valida else 0,
-            "confirmado": confirmado,
-            "confirmaciones": confirmaciones,
-            "confirmaciones_requeridas": CONFIRMACIONES_REQUERIDAS,
+            "score_price_action": score_pa,
+            "score_tendencia_inteligente": score_ti,
+            "puntaje_combinado": puntaje_combinado,
+            "puntaje_minimo": PUNTAJE_MINIMO,
             
             "hora_actual": actual_broker.strftime("%H:%M:%S"),
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
@@ -618,10 +624,6 @@ def senal():
             "tendencia": resultado.get("tendencia", "LATERAL"),
             "volatilidad": resultado.get("volatilidad", "media"),
             "indicadores": resultado.get("indicadores", {}),
-            "estructura_ultima": resultado.get("estructura_ultima", "N/A"),
-            "color_ultima": resultado.get("color_ultima", "N/A"),
-            "tipo_mas_comun": resultado.get("tipo_mas_comun", "N/A"),
-            "fuerza_promedio_siguiente": resultado.get("fuerza_promedio_siguiente", 0),
             
             "duracion_seg": int(duracion_seg),
             "duracion_min": duracion_min,
@@ -641,7 +643,7 @@ def senal():
 @requiere_conexion
 def escanear_activos():
     """
-    ESCANEA TODOS LOS ACTIVOS CON 1 VELA + 1 CONFIRMACIÓN FLEXIBLE
+    ESCANEA TODOS LOS ACTIVOS CON ESTRATEGIA COMBINADA
     """
     api = sesion["api"]
     body = request.get_json(force=True)
@@ -651,7 +653,9 @@ def escanear_activos():
     
     activos = _cache_activos if _cache_activos else []
     
-    log.info(f"🔍 Escaneando {len(activos)} activos con 1 vela + 1 confirmación flexible...")
+    log.info(f"🔍 Escaneando {len(activos)} activos con estrategia combinada...")
+    log.info(f"📊 Price Action (50%) + Tendencia Inteligente (50%)")
+    log.info(f"🎯 Puntaje mínimo: {PUNTAJE_MINIMO}%")
     
     resultados = []
     activos_analizados = 0
@@ -664,18 +668,18 @@ def escanear_activos():
                 continue
             
             candles = [raw_a_vela(c) for c in raw]
-            senal = generar_senal(candles, "1_vela", intervalo)
+            senal = generar_senal(candles, "combinada", intervalo)
             activos_analizados += 1
             
-            if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= CONFIANZA_MINIMA and senal.get("confirmado", False):
+            if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= CONFIANZA_MINIMA:
                 resultados.append({
                     "activo": ticker,
                     "nombre": _nombre_legible(ticker),
                     "direccion": senal["direccion"],
                     "confianza": senal["confianza"],
-                    "confirmaciones": senal.get("confirmaciones", 0),
-                    "estructura": senal.get("estructura_ultima", "N/A"),
-                    "tipo_mas_comun": senal.get("tipo_mas_comun", "N/A"),
+                    "score_pa": senal.get("score_price_action", 0),
+                    "score_ti": senal.get("score_tendencia_inteligente", 0),
+                    "puntaje_combinado": senal.get("puntaje_combinado", 0),
                     "razones": senal.get("razones", [])[:3],
                     "payout": activo["payout"],
                     "es_obligatorio": activo.get("obligatorio", False),
@@ -707,7 +711,8 @@ def escanear_activos():
     
     if resultados:
         mejor = resultados[0]
-        log.info(f"✅ MEJOR SEÑAL: {mejor['activo']} → {mejor['direccion']} ({mejor['confianza']}%) - {mejor['estructura']}")
+        log.info(f"✅ MEJOR SEÑAL: {mejor['activo']} → {mejor['direccion']} ({mejor['confianza']}%)")
+        log.info(f"📊 Price Action: {mejor['score_pa']}% | Tendencia: {mejor['score_ti']}% | Combinado: {mejor['puntaje_combinado']}%")
         
         return jsonify({
             "ok": True,
@@ -715,14 +720,14 @@ def escanear_activos():
             "activo": mejor["activo"],
             "nombre": mejor["nombre"],
             "confianza": mejor["confianza"],
-            "confirmaciones": mejor["confirmaciones"],
-            "estructura": mejor["estructura"],
-            "tipo_mas_comun": mejor["tipo_mas_comun"],
+            "score_price_action": mejor["score_pa"],
+            "score_tendencia_inteligente": mejor["score_ti"],
+            "puntaje_combinado": mejor["puntaje_combinado"],
+            "puntaje_minimo": PUNTAJE_MINIMO,
             "razones": mejor["razones"],
             "payout": mejor["payout"],
             "es_obligatorio": mejor.get("es_obligatorio", False),
             "estrella": mejor.get("estrella", ""),
-            "confirmaciones_requeridas": CONFIRMACIONES_REQUERIDAS,
             
             "hora_actual": actual_broker.strftime("%H:%M:%S"),
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
@@ -734,27 +739,23 @@ def escanear_activos():
             "señales_encontradas": len(resultados),
             "mejores_activos": resultados[:10],
             "mensaje_entrada": f"Entrar a {mejor['nombre']} a las {entrada_broker.strftime('%H:%M:%S')}",
+            "estrategias": ["Price Action (50%)", "Tendencia Inteligente (50%)"],
         })
     else:
         return jsonify({
             "ok": False,
-            "mensaje": "No se encontraron señales con confirmación",
+            "mensaje": "No se encontraron señales con puntaje mínimo",
             "total_escaneados": activos_analizados,
             "hora_actual": actual_broker.strftime("%H:%M:%S"),
             "hora_entrada": entrada_broker.strftime("%H:%M:%S"),
             "segundos_para_entrar": max(0, round(seg_para_entrar, 1)),
+            "puntaje_minimo": PUNTAJE_MINIMO,
         })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print("="*80)
-    print("  IQ Option Bot API  v15.1 - 1 VELA + 1 CONFIRMACIÓN FLEXIBLE")
+    print("  IQ Option Bot API  v16.0 - ESTRATEGIA COMBINADA")
     print(f"  http://0.0.0.0:{port}")
     print("="*80)
-    print("")
-    print("  🔥 NUEVA LÓGICA DE ANÁLISIS:")
-    print("     ✅ Toma SOLO la última vela CERRADA")
-    print("     ✅ Busca esa vela en el historial (1000 velas)")
-    print("     ✅ CONFIRMA 1 VEZ (flexible: color + tipo)")
-    print("     ✅ Predice cómo terminará la vela EN MOVIMIENTO")
-    print
+    print("
