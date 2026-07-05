@@ -1,9 +1,9 @@
 """
-server.py — IQ Option Bot API v14.0
+server.py — IQ Option Bot API v14.1
 - 30 ESTRATEGIAS + ESCANEO AUTOMÁTICO
 - 10 ACTIVOS OBLIGATORIOS SIEMPRE VISIBLES
+- CORRECCIÓN DE TICKERS ALTERNATIVOS
 - SEÑAL CADA MINUTO AUTOMÁTICA
-- SIN TIMEOUT EN RENDER
 - 500 VELAS (RÁPIDO Y SUFICIENTE)
 - PATCH PARA ERROR get_digital_underlying_list_data
 """
@@ -62,6 +62,20 @@ ACTIVOS_OBLIGATORIOS = [
     {"ticker": "ETHUSD-OTC", "nombre": "ETH/USD (OTC)", "payout": 85, "estrella": "⭐"},
     {"ticker": "EURJPY-OTC", "nombre": "EUR/JPY (OTC)", "payout": 85, "estrella": "⭐"},
 ]
+
+# ── MAPEO DE TICKERS ALTERNATIVOS (CORRECCIÓN) ──────────────────
+TICKER_ALTERNATIVOS = {
+    "EURUSD-OTC": ["EURUSD-OTC", "EURUSD", "EUR-USD"],
+    "GBPUSD-OTC": ["GBPUSD-OTC", "GBPUSD", "GBP-USD"],
+    "EURGBP-OTC": ["EURGBP-OTC", "EURGBP", "EUR-GBP"],
+    "AUDUSD-OTC": ["AUDUSD-OTC", "AUDUSD", "AUD-USD"],
+    "USDJPY-OTC": ["USDJPY-OTC", "USDJPY", "USD-JPY"],
+    "USDCHF-OTC": ["USDCHF-OTC", "USDCHF", "USD-CHF"],
+    "XAUUSD-OTC": ["XAUUSD-OTC", "XAUUSD", "XAU-USD", "GOLD-OTC", "GOLD"],
+    "BTCUSD-OTC": ["BTCUSD-OTC", "BTCUSD", "BTC-USD", "BITCOIN-OTC"],
+    "ETHUSD-OTC": ["ETHUSD-OTC", "ETHUSD", "ETH-USD", "ETHEREUM-OTC"],
+    "EURJPY-OTC": ["EURJPY-OTC", "EURJPY", "EUR-JPY"],
+}
 
 # ── MAPEO DE DURACIONES ─────────────────────────────────────────
 DURACIONES = [
@@ -160,6 +174,30 @@ def raw_a_vela(c):
 
 def hora_broker(timestamp):
     return datetime.fromtimestamp(timestamp, tz=BROKER_TIMEZONE)
+
+# ════════════════════════════════════════════════════════════════
+#  FUNCIÓN PARA OBTENER VELAS CON FALLBACK DE TICKERS (NUEVA)
+# ════════════════════════════════════════════════════════════════
+
+def obtener_velas_con_fallback(api, ticker, intervalo, cantidad):
+    """
+    Intenta obtener velas con el ticker principal,
+    si falla, prueba con alternativos
+    """
+    # Lista de tickers a probar
+    tickers_a_probar = TICKER_ALTERNATIVOS.get(ticker, [ticker])
+    
+    for t in tickers_a_probar:
+        try:
+            raw = api.get_candles(t, intervalo, cantidad, time.time())
+            if raw and len(raw) > 0:
+                log.info(f"✅ Velas obtenidas para {ticker} usando: {t}")
+                return raw
+        except Exception as e:
+            continue
+    
+    log.warning(f"❌ No se pudieron obtener velas para {ticker}")
+    return None
 
 # ════════════════════════════════════════════════════════════════
 #  AUTO-CONNECT
@@ -282,7 +320,7 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api": "IQ Option Bot API",
-        "version": "14.0",
+        "version": "14.1",
         "estado": "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
@@ -305,7 +343,7 @@ def ping():
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
-        "version": "14.0",
+        "version": "14.1",
         "timestamp": int(time.time()),
     })
 
@@ -501,12 +539,13 @@ def senal():
     cantidad_velas = int(body.get("cantidad_velas", VELAS_PARA_ANALISIS))
 
     try:
-        raw = api.get_candles(activo, intervalo, cantidad_velas, time.time())
+        # ── OBTENER VELAS CON FALLBACK ──────────────────────────
+        raw = obtener_velas_con_fallback(api, activo, intervalo, cantidad_velas)
         if not raw:
             return jsonify({"error": f"Sin velas para {activo}"}), 404
 
         candles = [raw_a_vela(c) for c in raw]
-        resultado = generar_senal(candles, "estructura", intervalo)
+        resultado = generar_senal(candles, "30_estrategias", intervalo)
 
         confianza = resultado.get("confianza", 0)
         estrategia_usada = resultado.get("estrategia_usada", "Ninguna")
@@ -592,9 +631,7 @@ def senal():
 @requiere_conexion
 def escanear_activos():
     """
-    ESCANEA TODOS LOS ACTIVOS OTC CON 30 ESTRATEGIAS
-    
-    Encuentra el MEJOR activo para operar en este momento
+    ESCANEA TODOS LOS ACTIVOS CON FALLBACK DE TICKERS
     """
     api = sesion["api"]
     body = request.get_json(force=True)
@@ -605,7 +642,7 @@ def escanear_activos():
     # Obtener TODOS los activos
     activos = _cache_activos if _cache_activos else []
     
-    log.info(f"🔍 Escaneando {len(activos)} activos con 30 estrategias...")
+    log.info(f"🔍 Escaneando {len(activos)} activos con fallback de tickers...")
     
     resultados = []
     activos_analizados = 0
@@ -613,8 +650,10 @@ def escanear_activos():
     for activo in activos:
         ticker = activo["ticker"]
         try:
-            raw = api.get_candles(ticker, intervalo, VELAS_PARA_ANALISIS, time.time())
+            # ── OBTENER VELAS CON FALLBACK ──────────────────────
+            raw = obtener_velas_con_fallback(api, ticker, intervalo, VELAS_PARA_ANALISIS)
             if not raw:
+                log.warning(f"⚠️ No se pudieron obtener velas para {ticker}")
                 continue
             
             candles = [raw_a_vela(c) for c in raw]
@@ -639,6 +678,7 @@ def escanear_activos():
             time.sleep(0.05)
             
         except Exception as e:
+            log.error(f"Error escaneando {ticker}: {e}")
             continue
     
     # ── TIMING PERFECTO ──────────────────────────────────────────
@@ -711,35 +751,9 @@ def escanear_activos():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print("="*80)
-    print("  IQ Option Bot API  v14.0 - 30 ESTRATEGIAS")
+    print("  IQ Option Bot API  v14.1 - CORRECCIÓN DE TICKERS")
     print(f"  http://0.0.0.0:{port}")
     print("="*80)
     print("")
     print("  🔥 30 ESTRATEGIAS DE TRADING:")
-    print("     ✅ Engulfing + RSI           ✅ Bollinger + Stoch")
-    print("     ✅ SuperTrend + EMA          ✅ Fibonacci + Patrón")
-    print("     ✅ MACD + Momentum           ✅ Pin Bar + Soporte")
-    print("     ✅ 3 Velas + Tendencia       ✅ RSI Divergencia")
-    print("     ✅ Squeeze Momentum          ✅ Ichimoku")
-    print("     ✅ Order Block + RSI         ✅ CHoCH + EMA")
-    print("     ✅ Stoch RSI + Squeeze       ✅ RSI Div Oculta")
-    print("     ✅ MACD Div + Pin Bar        ✅ CCI + Engulfing")
-    print("     ✅ Williams + 3 Velas        ✅ 3 Drives + Fibonacci")
-    print("     ✅ ABCD + RSI                ✅ Gartley + Bollinger")
-    print("     ✅ Bat + Stoch               ✅ Butterfly + SuperTrend")
-    print("")
-    print("  ⭐ 10 ACTIVOS OBLIGATORIOS:")
-    print("     EUR/USD, GBP/USD, EUR/GBP, AUD/USD, USD/JPY")
-    print("     USD/CHF, XAU/USD, BTC/USD, ETH/USD, EUR/JPY")
-    print("")
-    print("  📊 CONFIGURACIÓN:")
-    print(f"     📊 Intervalo de velas: {INTERVALO_FIJO}s")
-    print(f"     📊 Máximo velas históricas: {VELAS_PARA_ANALISIS}")
-    print(f"     🎯 Entrada SIEMPRE en HH:MM:00 (inicio de vela)")
-    print(f"     🕐 Zona horaria del BROKER: UTC-6")
-    print(f"     🔒 Confianza mínima: {CONFIANZA_MINIMA}%")
-    print("     🔍 ESCANEA TODOS los activos OTC")
-    print("     🏆 Encuentra el MEJOR activo para operar")
-    print("     ⚡ Señal automática cada minuto")
-    print("="*80)
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+    print("     ✅ Engulfing +
