@@ -1,20 +1,20 @@
 """
-server.py — IQ Option Bot API v15.0
-- PREDICCIÓN CON 1 VELA + 2 CONFIRMACIONES
+server.py — IQ Option Bot API v15.1
+- PREDICCIÓN CON 1 VELA + 1 CONFIRMACIÓN FLEXIBLE
 - Analiza SOLO la última vela CERRADA
 - Busca esa vela en el historial (1000 velas)
-- CONFIRMA 2 VECES la coincidencia
+- CONFIRMA 1 VEZ (flexible: color + tipo)
 - Predice cómo terminará la vela EN MOVIMIENTO
 - 10 ACTIVOS OBLIGATORIOS SIEMPRE VISIBLES
 - CORRECCIÓN DE TICKERS ALTERNATIVOS
-- PATCH PARA ERROR get_digital_underlying_list_data
+- PATCH CORREGIDO PARA ERROR get_digital_underlying_list_data
 """
 
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 # ════════════════════════════════════════════════════════════════
-#  PATCH: EVITAR ERROR get_digital_underlying_list_data
+#  PATCH CORREGIDO: EVITAR ERROR get_digital_underlying_list_data
 # ════════════════════════════════════════════════════════════════
 
 import iqoptionapi.stable_api as stable_api
@@ -27,7 +27,8 @@ def _patched_get_digital_open(self):
     except Exception:
         return {"underlying": {}}
 
-stable_api.IQ_Option.__get_digital_open = _patched_get_digital_open
+# ✅ CORRECCIÓN: Python name mangling
+stable_api.IQ_Option._IQ_Option__get_digital_open = _patched_get_digital_open
 
 # ════════════════════════════════════════════════════════════════
 #  RESTO DEL CÓDIGO
@@ -46,11 +47,11 @@ CORS(app, origins="*", allow_headers=["Content-Type","Accept","Authorization","X
 
 # ── CONFIGURACIÓN ─────────────────────────────────────────────────
 BROKER_TIMEZONE = timezone(timedelta(hours=-6))
-CONFIANZA_MINIMA = 60
+CONFIANZA_MINIMA = 55
 INTERVALO_FIJO = 60
-VELAS_PARA_ANALISIS = 1000  # ✅ 1000 velas para buscar confirmaciones
+VELAS_PARA_ANALISIS = 1000
 MAX_ACTIVOS_ESCANEAR = 999
-CONFIRMACIONES_REQUERIDAS = 2  # ✅ REQUIERE 2 CONFIRMACIONES
+CONFIRMACIONES_REQUERIDAS = 1  # ✅ SOLO 1 CONFIRMACIÓN FLEXIBLE
 
 # ── 10 ACTIVOS OBLIGATORIOS ────────────────────────────────────
 ACTIVOS_OBLIGATORIOS = [
@@ -319,7 +320,7 @@ threading.Thread(target=_precargar_activos, daemon=True).start()
 def raiz():
     return jsonify({
         "api": "IQ Option Bot API",
-        "version": "15.0",
+        "version": "15.1",
         "estado": "online",
         "conectado": sesion["conectado"],
         "activos_en_cache": len(_cache_activos),
@@ -327,10 +328,11 @@ def raiz():
         "broker_timezone": "UTC-6",
         "confianza_minima": CONFIANZA_MINIMA,
         "confirmaciones_requeridas": CONFIRMACIONES_REQUERIDAS,
-        "analisis": "1_vela_2_confirmaciones",
+        "analisis": "1_vela_1_confirmacion_flexible",
         "max_velas_historicas": VELAS_PARA_ANALISIS,
         "activos_obligatorios": len(ACTIVOS_OBLIGATORIOS),
         "duraciones": DURACIONES,
+        "patch_aplicado": "name_mangling_correcto",
     })
 
 @app.route("/iq/ping")
@@ -343,7 +345,7 @@ def ping():
         "activos_en_cache": len(_cache_activos),
         "intervalo_fijo": INTERVALO_FIJO,
         "broker_timezone": "UTC-6",
-        "version": "15.0",
+        "version": "15.1",
         "timestamp": int(time.time()),
     })
 
@@ -523,13 +525,13 @@ def velas_stop():
         return jsonify({"error": str(e)}), 500
 
 # ════════════════════════════════════════════════════════════════
-#  ENDPOINT: SEÑAL PARA UN ACTIVO ESPECÍFICO (1 VELA + 2 CONFIRMACIONES)
+#  ENDPOINT: SEÑAL PARA UN ACTIVO ESPECÍFICO
 # ════════════════════════════════════════════════════════════════
 
 @app.route("/iq/senal", methods=["POST"])
 @requiere_conexion
 def senal():
-    """Señal para un activo específico - 1 vela + 2 confirmaciones"""
+    """Señal para un activo específico - 1 vela + 1 confirmación flexible"""
     api = sesion["api"]
     body = request.get_json(force=True)
 
@@ -585,7 +587,7 @@ def senal():
         es_valida = (
             resultado["direccion"] in ("BUY", "SELL") and
             confianza >= CONFIANZA_MINIMA and
-            confirmado  # ✅ REQUIERE 2 CONFIRMACIONES
+            confirmado
         )
 
         if not es_valida:
@@ -639,7 +641,7 @@ def senal():
 @requiere_conexion
 def escanear_activos():
     """
-    ESCANEA TODOS LOS ACTIVOS CON 1 VELA + 2 CONFIRMACIONES
+    ESCANEA TODOS LOS ACTIVOS CON 1 VELA + 1 CONFIRMACIÓN FLEXIBLE
     """
     api = sesion["api"]
     body = request.get_json(force=True)
@@ -649,7 +651,7 @@ def escanear_activos():
     
     activos = _cache_activos if _cache_activos else []
     
-    log.info(f"🔍 Escaneando {len(activos)} activos con 1 vela + 2 confirmaciones...")
+    log.info(f"🔍 Escaneando {len(activos)} activos con 1 vela + 1 confirmación flexible...")
     
     resultados = []
     activos_analizados = 0
@@ -746,12 +748,13 @@ def escanear_activos():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print("="*80)
-    print("  IQ Option Bot API  v15.0 - 1 VELA + 2 CONFIRMACIONES")
+    print("  IQ Option Bot API  v15.1 - 1 VELA + 1 CONFIRMACIÓN FLEXIBLE")
     print(f"  http://0.0.0.0:{port}")
     print("="*80)
     print("")
     print("  🔥 NUEVA LÓGICA DE ANÁLISIS:")
     print("     ✅ Toma SOLO la última vela CERRADA")
     print("     ✅ Busca esa vela en el historial (1000 velas)")
-    print("     ✅ CONFIRMA 2 VECES la coincidencia")
-    print("     ✅ Predice cómo terminará la vela EN
+    print("     ✅ CONFIRMA 1 VEZ (flexible: color + tipo)")
+    print("     ✅ Predice cómo terminará la vela EN MOVIMIENTO")
+    print
