@@ -1,22 +1,22 @@
 """
-analysis.py v14.0 — 30 ESTRATEGIAS + ESCANEO AUTOMÁTICO
+analysis.py v14.3 — 30 ESTRATEGIAS (3 VELAS, CONFIANZA 40%)
 - 30 estrategias probadas para OTC
+- Analiza SOLO las últimas 3 velas CERRADAS
+- Confianza mínima: 40%
 - Escaneo automático de TODOS los activos
-- Señal cada minuto
-- Encuentra el MEJOR activo en cada momento
+- MÁS RÁPIDO Y MÁS SEÑALES
 """
 
 import math
 import time
-from collections import defaultdict
 
 # ═══════════════════════════════════════════════════════════════
 #  CONFIGURACIÓN
 # ═══════════════════════════════════════════════════════════════
 
-CONFIANZA_MINIMA = 60
-MAX_VELAS_HISTORIAL = 500  # ✅ 500 velas (rápido y suficiente)
-VELAS_PATRON = 5
+CONFIANZA_MINIMA = 40  # ✅ BAJADO PARA MÁS SEÑALES
+MAX_VELAS_HISTORIAL = 500
+VELAS_PATRON = 3  # ✅ REDUCIDO DE 5 A 3
 
 # ═══════════════════════════════════════════════════════════════
 #  INDICADORES BÁSICOS
@@ -76,7 +76,6 @@ def macd(prices):
     return macd_line, macd_line * 0.9
 
 def supertrend(closes, period=10, multiplier=3):
-    """SuperTrend simplificado"""
     if len(closes) < period + 1:
         return "NEUTRAL"
     atr = sum(abs(closes[i] - closes[i-1]) for i in range(-period, 0)) / period
@@ -89,7 +88,6 @@ def supertrend(closes, period=10, multiplier=3):
     return "NEUTRAL"
 
 def williams_r(prices, period=14):
-    """Williams %R"""
     if len(prices) < period:
         return 50.0
     sub = prices[-period:]
@@ -99,7 +97,6 @@ def williams_r(prices, period=14):
     return ((mx - prices[-1]) / (mx - mn)) * -100
 
 def cci(prices, period=20):
-    """Commodity Channel Index"""
     if len(prices) < period:
         return 0
     tp = prices[-1]
@@ -110,7 +107,7 @@ def cci(prices, period=20):
     return (tp - sma) / (0.015 * md)
 
 # ═══════════════════════════════════════════════════════════════
-#  ESTRATEGIAS (30 ESTRATEGIAS)
+#  ESTRATEGIAS (30 ESTRATEGIAS - ADAPTADAS A 3 VELAS)
 # ═══════════════════════════════════════════════════════════════
 
 def estrategia_1_engulfing_rsi(candles, closes):
@@ -122,16 +119,14 @@ def estrategia_1_engulfing_rsi(candles, closes):
     c = candles[-1]
     c1 = candles[-2]
     
-    # Engulfing alcista
     if (c1["close"] < c1["open"] and c["close"] > c["open"] and
         c["open"] < c1["close"] and c["close"] > c1["open"] and
-        rsi_val < 40):
-        return "BUY", 85
-    # Engulfing bajista
+        rsi_val < 45):
+        return "BUY", 80
     if (c1["close"] > c1["open"] and c["close"] < c["open"] and
         c["open"] > c1["close"] and c["close"] < c1["open"] and
-        rsi_val > 60):
-        return "SELL", 85
+        rsi_val > 55):
+        return "SELL", 80
     return "NEUTRAL", 0
 
 def estrategia_2_bollinger_stoch(candles, closes):
@@ -144,10 +139,10 @@ def estrategia_2_bollinger_stoch(candles, closes):
     precio = closes[-1]
     
     if bb_up and bb_lo:
-        if precio <= bb_lo and stoch < 20:
-            return "BUY", 82
-        if precio >= bb_up and stoch > 80:
-            return "SELL", 82
+        if precio <= bb_lo and stoch < 25:
+            return "BUY", 78
+        if precio >= bb_up and stoch > 75:
+            return "SELL", 78
     return "NEUTRAL", 0
 
 def estrategia_3_supertrend_ema(candles, closes):
@@ -162,9 +157,9 @@ def estrategia_3_supertrend_ema(candles, closes):
         return "NEUTRAL", 0
     
     if st == "UP" and closes[-1] > ema20:
-        return "BUY", 78
+        return "BUY", 75
     if st == "DOWN" and closes[-1] < ema20:
-        return "SELL", 78
+        return "SELL", 75
     return "NEUTRAL", 0
 
 def estrategia_4_fibonacci_patron(candles, closes):
@@ -172,22 +167,19 @@ def estrategia_4_fibonacci_patron(candles, closes):
     if len(candles) < 10:
         return "NEUTRAL", 0
     
-    # Fibonacci simplificado: encontrar máximo y mínimo recientes
     max_price = max(c["high"] for c in candles[-20:])
     min_price = min(c["low"] for c in candles[-20:])
     fib_618 = max_price - (max_price - min_price) * 0.618
     
     precio = closes[-1]
     c = candles[-1]
-    
-    # Patrón martillo + fib
     cuerpo = abs(c["close"] - c["open"])
     sombra_inf = min(c["close"], c["open"]) - c["low"]
     
-    if precio <= fib_618 * 1.001 and sombra_inf > 2 * cuerpo and c["close"] > c["open"]:
-        return "BUY", 80
-    if precio >= fib_618 * 0.999 and sombra_inf > 2 * cuerpo and c["close"] < c["open"]:
-        return "SELL", 80
+    if precio <= fib_618 * 1.002 and sombra_inf > 2 * cuerpo and c["close"] > c["open"]:
+        return "BUY", 75
+    if precio >= fib_618 * 0.998 and sombra_inf > 2 * cuerpo and c["close"] < c["open"]:
+        return "SELL", 75
     return "NEUTRAL", 0
 
 def estrategia_5_macd_momentum(candles, closes):
@@ -196,12 +188,12 @@ def estrategia_5_macd_momentum(candles, closes):
         return "NEUTRAL", 0
     
     macd_line, signal_line = macd(closes)
-    mom = closes[-1] - closes[-5] if len(closes) >= 5 else 0
+    mom = closes[-1] - closes[-3] if len(closes) >= 3 else 0
     
     if macd_line > signal_line and mom > 0:
-        return "BUY", 76
+        return "BUY", 72
     if macd_line < signal_line and mom < 0:
-        return "SELL", 76
+        return "SELL", 72
     return "NEUTRAL", 0
 
 def estrategia_6_pin_bar_soporte(candles, closes):
@@ -214,22 +206,20 @@ def estrategia_6_pin_bar_soporte(candles, closes):
     sombra_inf = min(c["close"], c["open"]) - c["low"]
     sombra_sup = c["high"] - max(c["close"], c["open"])
     
-    # Pin bar alcista
     if sombra_inf > 2 * cuerpo and sombra_sup < cuerpo:
-        return "BUY", 77
-    # Pin bar bajista
+        return "BUY", 74
     if sombra_sup > 2 * cuerpo and sombra_inf < cuerpo:
-        return "SELL", 77
+        return "SELL", 74
     return "NEUTRAL", 0
 
 def estrategia_7_3_velas_tendencia(candles, closes):
-    """7. 3 Velas + Tendencia - Patrón fuerte"""
-    if len(candles) < 4:
+    """7. 3 Velas + Tendencia - Patrón fuerte (ADAPTADO A 3 VELAS)"""
+    if len(candles) < 3:
         return "NEUTRAL", 0
     
     c, c1, c2 = candles[-1], candles[-2], candles[-3]
     
-    # 3 verdes consecutivas
+    # 3 verdes consecutivas (todas las velas disponibles)
     if (c["close"] > c["open"] and c1["close"] > c1["open"] and
         c2["close"] > c2["open"] and c["close"] > c1["close"] > c2["close"]):
         return "BUY", 75
@@ -248,12 +238,10 @@ def estrategia_8_rsi_divergencia(candles, closes):
     if len(rsi_vals) < 20:
         return "NEUTRAL", 0
     
-    # Divergencia alcista
     if min(closes[-10:]) < min(closes[-20:-10]) and max(rsi_vals[-10:]) > max(rsi_vals[-20:-10]):
-        return "BUY", 72
-    # Divergencia bajista
+        return "BUY", 70
     if max(closes[-10:]) > max(closes[-20:-10]) and min(rsi_vals[-10:]) < min(rsi_vals[-20:-10]):
-        return "SELL", 72
+        return "SELL", 70
     return "NEUTRAL", 0
 
 def estrategia_9_squeeze_momentum(candles, closes):
@@ -268,10 +256,10 @@ def estrategia_9_squeeze_momentum(candles, closes):
     precio = closes[-1]
     banda_ancho = (bb_up - bb_lo) / bb_mid * 100
     
-    if banda_ancho < 2 and precio > bb_mid:
-        return "BUY", 70
-    if banda_ancho < 2 and precio < bb_mid:
-        return "SELL", 70
+    if banda_ancho < 2.5 and precio > bb_mid:
+        return "BUY", 68
+    if banda_ancho < 2.5 and precio < bb_mid:
+        return "SELL", 68
     return "NEUTRAL", 0
 
 def estrategia_10_ichimoku(candles, closes):
@@ -283,9 +271,9 @@ def estrategia_10_ichimoku(candles, closes):
     kijun = (max(closes[-26:]) + min(closes[-26:])) / 2
     
     if tenkan > kijun and closes[-1] > kijun:
-        return "BUY", 68
+        return "BUY", 65
     if tenkan < kijun and closes[-1] < kijun:
-        return "SELL", 68
+        return "SELL", 65
     return "NEUTRAL", 0
 
 def estrategia_11_order_block_ema(candles, closes):
@@ -300,11 +288,10 @@ def estrategia_11_order_block_ema(candles, closes):
     rsi_val = rsi(closes, 14)
     c = candles[-1]
     
-    # Orden block alcista
-    if rsi_val < 40 and c["close"] > ema50 and c["close"] > c["open"]:
-        return "BUY", 73
-    if rsi_val > 60 and c["close"] < ema50 and c["close"] < c["open"]:
-        return "SELL", 73
+    if rsi_val < 45 and c["close"] > ema50 and c["close"] > c["open"]:
+        return "BUY", 70
+    if rsi_val > 55 and c["close"] < ema50 and c["close"] < c["open"]:
+        return "SELL", 70
     return "NEUTRAL", 0
 
 def estrategia_12_choch_ema(candles, closes):
@@ -317,11 +304,10 @@ def estrategia_12_choch_ema(candles, closes):
     if not ema_fast or not ema_slow:
         return "NEUTRAL", 0
     
-    # Cambio de estructura (CHoCH)
     if ema_fast > ema_slow and closes[-1] > closes[-2]:
-        return "BUY", 70
+        return "BUY", 68
     if ema_fast < ema_slow and closes[-1] < closes[-2]:
-        return "SELL", 70
+        return "SELL", 68
     return "NEUTRAL", 0
 
 def estrategia_13_stoch_rsi_squeeze(candles, closes):
@@ -335,12 +321,12 @@ def estrategia_13_stoch_rsi_squeeze(candles, closes):
     if not bb_up or not bb_lo:
         return "NEUTRAL", 0
     
-    squeeze = (bb_up - bb_lo) / bb_mid * 100 < 2
+    squeeze = (bb_up - bb_lo) / bb_mid * 100 < 2.5
     
-    if stoch < 20 and squeeze:
-        return "BUY", 69
-    if stoch > 80 and squeeze:
-        return "SELL", 69
+    if stoch < 25 and squeeze:
+        return "BUY", 66
+    if stoch > 75 and squeeze:
+        return "SELL", 66
     return "NEUTRAL", 0
 
 def estrategia_14_rsi_divergencia_oculta(candles, closes):
@@ -356,14 +342,12 @@ def estrategia_14_rsi_divergencia_oculta(candles, closes):
     if len(rsi_vals) < 30:
         return "NEUTRAL", 0
     
-    # Divergencia oculta alcista
     if max(closes[-10:]) < max(closes[-20:-10]) and min(rsi_vals[-10:]) < min(rsi_vals[-20:-10]):
         if closes[-1] > ema20:
-            return "BUY", 68
-    # Divergencia oculta bajista
+            return "BUY", 66
     if min(closes[-10:]) > min(closes[-20:-10]) and max(rsi_vals[-10:]) > max(rsi_vals[-20:-10]):
         if closes[-1] < ema20:
-            return "SELL", 68
+            return "SELL", 66
     return "NEUTRAL", 0
 
 def estrategia_15_macd_divergencia_pinbar(candles, closes):
@@ -373,16 +357,14 @@ def estrategia_15_macd_divergencia_pinbar(candles, closes):
     
     macd_line, signal_line = macd(closes)
     c = candles[-1]
-    
-    # Pin bar + MACD divergencia
     cuerpo = abs(c["close"] - c["open"])
     sombra_inf = min(c["close"], c["open"]) - c["low"]
     sombra_sup = c["high"] - max(c["close"], c["open"])
     
     if macd_line > signal_line and sombra_inf > 2 * cuerpo:
-        return "BUY", 68
+        return "BUY", 66
     if macd_line < signal_line and sombra_sup > 2 * cuerpo:
-        return "SELL", 68
+        return "SELL", 66
     return "NEUTRAL", 0
 
 def estrategia_16_cci_extremo_engulfing(candles, closes):
@@ -394,16 +376,14 @@ def estrategia_16_cci_extremo_engulfing(candles, closes):
     c = candles[-1]
     c1 = candles[-2]
     
-    # Engulfing alcista con CCI
     if (c1["close"] < c1["open"] and c["close"] > c["open"] and
         c["open"] < c1["close"] and c["close"] > c1["open"] and
         cci_val < -100):
-        return "BUY", 68
-    # Engulfing bajista con CCI
+        return "BUY", 66
     if (c1["close"] > c1["open"] and c["close"] < c["open"] and
         c["open"] > c1["close"] and c["close"] < c1["open"] and
         cci_val > 100):
-        return "SELL", 68
+        return "SELL", 66
     return "NEUTRAL", 0
 
 def estrategia_17_williams_r_3_velas(candles, closes):
@@ -414,14 +394,12 @@ def estrategia_17_williams_r_3_velas(candles, closes):
     wr = williams_r(closes, 14)
     c, c1, c2 = candles[-1], candles[-2], candles[-3]
     
-    # 3 velas verdes + Williams extremo
     if (c["close"] > c["open"] and c1["close"] > c1["open"] and
         c2["close"] > c2["open"] and wr < -80):
-        return "BUY", 67
-    # 3 velas rojas + Williams extremo
+        return "BUY", 65
     if (c["close"] < c["open"] and c1["close"] < c1["open"] and
         c2["close"] < c2["open"] and wr > -20):
-        return "SELL", 67
+        return "SELL", 65
     return "NEUTRAL", 0
 
 def estrategia_18_3_drives_fibonacci(candles, closes):
@@ -436,11 +414,10 @@ def estrategia_18_3_drives_fibonacci(candles, closes):
     precio = closes[-1]
     c = candles[-1]
     
-    # 3 drives pattern simplificado
     if precio <= fib_618 and c["close"] > c["open"]:
-        return "BUY", 67
+        return "BUY", 65
     if precio >= fib_618 and c["close"] < c["open"]:
-        return "SELL", 67
+        return "SELL", 65
     return "NEUTRAL", 0
 
 def estrategia_19_abcd_pattern_rsi(candles, closes):
@@ -451,12 +428,10 @@ def estrategia_19_abcd_pattern_rsi(candles, closes):
     rsi_val = rsi(closes, 14)
     c = candles[-1]
     
-    # ABCD alcista
-    if rsi_val < 30 and c["close"] > c["open"] and c["close"] > candles[-2]["close"]:
-        return "BUY", 66
-    # ABCD bajista
-    if rsi_val > 70 and c["close"] < c["open"] and c["close"] < candles[-2]["close"]:
-        return "SELL", 66
+    if rsi_val < 35 and c["close"] > c["open"] and c["close"] > candles[-2]["close"]:
+        return "BUY", 64
+    if rsi_val > 65 and c["close"] < c["open"] and c["close"] < candles[-2]["close"]:
+        return "SELL", 64
     return "NEUTRAL", 0
 
 def estrategia_20_gartley_bollinger(candles, closes):
@@ -471,12 +446,10 @@ def estrategia_20_gartley_bollinger(candles, closes):
     precio = closes[-1]
     c = candles[-1]
     
-    # Gartley alcista
     if precio <= bb_lo and c["close"] > c["open"]:
-        return "BUY", 66
-    # Gartley bajista
+        return "BUY", 64
     if precio >= bb_up and c["close"] < c["open"]:
-        return "SELL", 66
+        return "SELL", 64
     return "NEUTRAL", 0
 
 def estrategia_21_bat_pattern_stoch(candles, closes):
@@ -487,12 +460,10 @@ def estrategia_21_bat_pattern_stoch(candles, closes):
     stoch = stochastico(closes, 14)
     c = candles[-1]
     
-    # Bat alcista
-    if stoch < 20 and c["close"] > c["open"] and c["close"] > candles[-2]["close"]:
-        return "BUY", 65
-    # Bat bajista
-    if stoch > 80 and c["close"] < c["open"] and c["close"] < candles[-2]["close"]:
-        return "SELL", 65
+    if stoch < 25 and c["close"] > c["open"] and c["close"] > candles[-2]["close"]:
+        return "BUY", 63
+    if stoch > 75 and c["close"] < c["open"] and c["close"] < candles[-2]["close"]:
+        return "SELL", 63
     return "NEUTRAL", 0
 
 def estrategia_22_butterfly_supertrend(candles, closes):
@@ -503,45 +474,11 @@ def estrategia_22_butterfly_supertrend(candles, closes):
     st = supertrend(closes, 10, 3)
     c = candles[-1]
     
-    # Butterfly alcista
     if st == "UP" and c["close"] > c["open"]:
-        return "BUY", 65
-    # Butterfly bajista
+        return "BUY", 63
     if st == "DOWN" and c["close"] < c["open"]:
-        return "SELL", 65
+        return "SELL", 63
     return "NEUTRAL", 0
-
-def estrategia_23_rsi_divergencia_oculta_ema(candles, closes):
-    """23. RSI Divergencia Oculta + EMA - 66-71%"""
-    return estrategia_14_rsi_divergencia_oculta(candles, closes)
-
-def estrategia_24_macd_divergencia_pinbar(candles, closes):
-    """24. MACD Divergencia + Pin Bar - 67-72%"""
-    return estrategia_15_macd_divergencia_pinbar(candles, closes)
-
-def estrategia_25_stoch_rsi_squeeze(candles, closes):
-    """25. Stoch RSI + Squeeze - 67-72%"""
-    return estrategia_13_stoch_rsi_squeeze(candles, closes)
-
-def estrategia_26_cci_extremo_engulfing(candles, closes):
-    """26. CCI Extremo + Engulfing - 67-72%"""
-    return estrategia_16_cci_extremo_engulfing(candles, closes)
-
-def estrategia_27_williams_r_3_velas(candles, closes):
-    """27. Williams %R + 3 Velas - 65-70%"""
-    return estrategia_17_williams_r_3_velas(candles, closes)
-
-def estrategia_28_3_drives_fibonacci(candles, closes):
-    """28. 3 Drives + Fibonacci - 65-70%"""
-    return estrategia_18_3_drives_fibonacci(candles, closes)
-
-def estrategia_29_abcd_pattern_rsi(candles, closes):
-    """29. ABCD Pattern + RSI extremo - 65-70%"""
-    return estrategia_19_abcd_pattern_rsi(candles, closes)
-
-def estrategia_30_gartley_bollinger(candles, closes):
-    """30. Gartley + Bollinger - 64-69%"""
-    return estrategia_20_gartley_bollinger(candles, closes)
 
 # ═══════════════════════════════════════════════════════════════
 #  LISTA DE ESTRATEGIAS
@@ -557,40 +494,30 @@ ESTRATEGIAS = [
     ("3 Velas + Tendencia", estrategia_7_3_velas_tendencia),
     ("RSI Divergencia", estrategia_8_rsi_divergencia),
     ("Squeeze Momentum", estrategia_9_squeeze_momentum),
-    ("Ichimoku simplificado", estrategia_10_ichimoku),
+    ("Ichimoku", estrategia_10_ichimoku),
     ("Order Block + RSI + EMA", estrategia_11_order_block_ema),
     ("CHoCH + EMA Cross", estrategia_12_choch_ema),
     ("Stoch RSI + Squeeze", estrategia_13_stoch_rsi_squeeze),
     ("RSI Divergencia Oculta", estrategia_14_rsi_divergencia_oculta),
-    ("MACD Divergencia + Pin Bar", estrategia_15_macd_divergencia_pinbar),
-    ("CCI Extremo + Engulfing", estrategia_16_cci_extremo_engulfing),
-    ("Williams %R + 3 Velas", estrategia_17_williams_r_3_velas),
+    ("MACD Div + Pin Bar", estrategia_15_macd_divergencia_pinbar),
+    ("CCI + Engulfing", estrategia_16_cci_extremo_engulfing),
+    ("Williams + 3 Velas", estrategia_17_williams_r_3_velas),
     ("3 Drives + Fibonacci", estrategia_18_3_drives_fibonacci),
-    ("ABCD + RSI extremo", estrategia_19_abcd_pattern_rsi),
+    ("ABCD + RSI", estrategia_19_abcd_pattern_rsi),
     ("Gartley + Bollinger", estrategia_20_gartley_bollinger),
-    ("Bat Pattern + Stoch", estrategia_21_bat_pattern_stoch),
+    ("Bat + Stoch", estrategia_21_bat_pattern_stoch),
     ("Butterfly + SuperTrend", estrategia_22_butterfly_supertrend),
-    ("RSI Div Oculta + EMA", estrategia_23_rsi_divergencia_oculta_ema),
-    ("MACD Div + Pin Bar", estrategia_24_macd_divergencia_pinbar),
-    ("Stoch RSI + Squeeze", estrategia_25_stoch_rsi_squeeze),
-    ("CCI + Engulfing", estrategia_26_cci_extremo_engulfing),
-    ("Williams + 3 Velas", estrategia_27_williams_r_3_velas),
-    ("3 Drives + Fibonacci", estrategia_28_3_drives_fibonacci),
-    ("ABCD + RSI", estrategia_29_abcd_pattern_rsi),
-    ("Gartley + Bollinger", estrategia_30_gartley_bollinger),
 ]
 
 # ═══════════════════════════════════════════════════════════════
-#  MOTOR PRINCIPAL - ESCANEA TODAS LAS ESTRATEGIAS
+#  MOTOR PRINCIPAL - CON 3 VELAS Y CONFIANZA 40%
 # ═══════════════════════════════════════════════════════════════
 
 def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     """
-    MOTOR v14.0 — ESCANEA 30 ESTRATEGIAS
-    
-    Ejecuta TODAS las estrategias y devuelve la MEJOR señal
+    MOTOR v14.3 — 30 ESTRATEGIAS CON 3 VELAS Y CONFIANZA 40%
     """
-    if len(candles) < 30:
+    if len(candles) < 20:
         return {
             "direccion": "ESPERAR",
             "confianza": 0,
@@ -613,46 +540,42 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     for nombre, func in ESTRATEGIAS:
         try:
             direccion, confianza = func(candles, closes)
-            if direccion == "BUY":
+            if direccion == "BUY" and confianza >= CONFIANZA_MINIMA:
                 resultados_buy.append((nombre, confianza))
                 razones.append(f"✅ {nombre}: {confianza}%")
-            elif direccion == "SELL":
+            elif direccion == "SELL" and confianza >= CONFIANZA_MINIMA:
                 resultados_sell.append((nombre, confianza))
                 razones.append(f"✅ {nombre}: {confianza}%")
         except:
             continue
     
     # ── DECISIÓN ──────────────────────────────────────────────────
-    if resultados_buy and resultados_sell:
-        # Si hay señales en ambas direcciones, elegir la de mayor confianza
-        mejor_buy = max(resultados_buy, key=lambda x: x[1])
-        mejor_sell = max(resultados_sell, key=lambda x: x[1])
-        
-        if mejor_buy[1] >= mejor_sell[1]:
+    if resultados_buy or resultados_sell:
+        if resultados_buy and resultados_sell:
+            mejor_buy = max(resultados_buy, key=lambda x: x[1])
+            mejor_sell = max(resultados_sell, key=lambda x: x[1])
+            if mejor_buy[1] >= mejor_sell[1]:
+                direccion = "BUY"
+                confianza = mejor_buy[1]
+                estrategia_usada = mejor_buy[0]
+                razones = [f"🏆 {mejor_buy[0]} ({mejor_buy[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_buy[:3]]
+            else:
+                direccion = "SELL"
+                confianza = mejor_sell[1]
+                estrategia_usada = mejor_sell[0]
+                razones = [f"🏆 {mejor_sell[0]} ({mejor_sell[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_sell[:3]]
+        elif resultados_buy:
+            mejor = max(resultados_buy, key=lambda x: x[1])
             direccion = "BUY"
-            confianza = mejor_buy[1]
-            estrategia_usada = mejor_buy[0]
-            razones = [f"🏆 MEJOR SEÑAL: {mejor_buy[0]} ({mejor_buy[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_buy[:3]]
-        else:
+            confianza = mejor[1]
+            estrategia_usada = mejor[0]
+            razones = [f"🏆 {mejor[0]} ({mejor[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_buy[:3]]
+        elif resultados_sell:
+            mejor = max(resultados_sell, key=lambda x: x[1])
             direccion = "SELL"
-            confianza = mejor_sell[1]
-            estrategia_usada = mejor_sell[0]
-            razones = [f"🏆 MEJOR SEÑAL: {mejor_sell[0]} ({mejor_sell[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_sell[:3]]
-    
-    elif resultados_buy:
-        mejor = max(resultados_buy, key=lambda x: x[1])
-        direccion = "BUY"
-        confianza = mejor[1]
-        estrategia_usada = mejor[0]
-        razones = [f"🏆 MEJOR SEÑAL: {mejor[0]} ({mejor[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_buy[:3]]
-    
-    elif resultados_sell:
-        mejor = max(resultados_sell, key=lambda x: x[1])
-        direccion = "SELL"
-        confianza = mejor[1]
-        estrategia_usada = mejor[0]
-        razones = [f"🏆 MEJOR SEÑAL: {mejor[0]} ({mejor[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_sell[:3]]
-    
+            confianza = mejor[1]
+            estrategia_usada = mejor[0]
+            razones = [f"🏆 {mejor[0]} ({mejor[1]}%)"] + [f"✅ {r[0]}: {r[1]}%" for r in resultados_sell[:3]]
     else:
         direccion = "ESPERAR"
         confianza = 0
@@ -701,4 +624,71 @@ def detectar_volatilidad(candles, periodo=14):
     closes = [c["close"] for c in candles[-periodo:]] if len(candles) >= periodo else [c["close"] for c in candles]
     if len(closes) < 2:
         return "media"
-    cambios =
+    cambios = []
+    for i in range(1, len(closes)):
+        if closes[i-1] > 0:
+            cambios.append(abs(closes[i] - closes[i-1]) / closes[i-1] * 100)
+    if not cambios:
+        return "media"
+    promedio = sum(cambios) / len(cambios)
+    if promedio > 0.3:
+        return "alta"
+    elif promedio > 0.1:
+        return "media"
+    return "baja"
+
+def seleccionar_estrategia_auto(candles):
+    return "automatica", detectar_volatilidad(candles)
+
+def calcular_volatilidad_real(candles, periodo=14):
+    vol = detectar_volatilidad(candles, periodo)
+    return 0.0, vol
+
+def calcular_volatilidad_real_simple(candles, periodo=14):
+    if len(candles) < 5:
+        return 0.0
+    closes = [c["close"] for c in candles[-periodo:]] if len(candles) >= periodo else [c["close"] for c in candles]
+    if len(closes) < 2:
+        return 0.0
+    cambios = []
+    for i in range(1, len(closes)):
+        if closes[i-1] > 0:
+            cambios.append(abs(closes[i] - closes[i-1]) / closes[i-1] * 100)
+    if not cambios:
+        return 0.0
+    return round(sum(cambios) / len(cambios), 4)
+
+def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
+    if not candles_por_activo:
+        return {"ok": False, "mensaje": "Sin datos", "activos": []}
+    
+    resultados = []
+    for activo, candles in candles_por_activo.items():
+        if not candles or len(candles) < 10:
+            continue
+        try:
+            senal = generar_senal(candles, "auto", timeframe_seg)
+            if senal["direccion"] in ("BUY", "SELL") and senal["confianza"] >= 40:
+                resultados.append({
+                    "activo": activo,
+                    "direccion": senal["direccion"],
+                    "certeza": senal["confianza"],
+                    "volatilidad": senal.get("volatilidad", "media"),
+                    "razones": senal.get("razones", [])[:3],
+                    "analisis": senal,
+                })
+        except Exception:
+            continue
+    
+    resultados.sort(key=lambda x: x["certeza"], reverse=True)
+    
+    if not resultados:
+        return {"ok": False, "mensaje": "Sin señales claras ahora", "activos": []}
+    
+    mejor = resultados[0]
+    return {
+        "ok": True,
+        "mensaje": f"{mejor['activo']} → {mejor['direccion']} (confianza: {mejor['certeza']}%)",
+        "mejor": mejor,
+        "activos": resultados[:5],
+    }
