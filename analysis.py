@@ -1,24 +1,25 @@
 """
-analysis.py v13.2 — BÚSQUEDA CON SALTO DE VELA (CORREGIDO Y COMPLETO)
+analysis.py v13.3 — BÚSQUEDA CON SALTO DE VELA (OPTIMIZADO)
 - Busca 5 velas CERRADAS en el historial del MISMO activo
 - SALTA la vela actual (en movimiento)
 - Predice la PRÓXIMA vela (después de la actual)
 - ¡SIEMPRE BUY o SELL!
 - Precisión 90-95%
 - COMPATIBILIDAD COMPLETA con server.py
-- CORREGIDO: todos los campos necesarios para server.py
+- OPTIMIZADO: 15,000 velas históricas
 """
 
 import math
 import time
 
 # ═══════════════════════════════════════════════════════════════
-#  CONFIGURACIÓN
+#  CONFIGURACIÓN OPTIMIZADA
 # ═══════════════════════════════════════════════════════════════
 
 CONFIANZA_MINIMA = 60
-MAX_VELAS_HISTORIAL = 20000
+MAX_VELAS_HISTORIAL = 15000  # ✅ 15,000 velas (~10.4 días)
 VELAS_PATRON = 5
+MIN_REPETICIONES = 1
 
 # ═══════════════════════════════════════════════════════════════
 #  ANALIZAR ESTRUCTURA DE VELA
@@ -172,11 +173,12 @@ def crear_firma_patron(candles, cantidad=5):
 #  BUSCAR PATRÓN EN HISTORIAL CON SALTO DE VELA
 # ═══════════════════════════════════════════════════════════════
 
-def buscar_patron_con_salto(candles_historicas, patron_actual, profundidad=20000):
+def buscar_patron_con_salto(candles_historicas, patron_actual, profundidad=15000):
     """
     Busca el patrón de 5 velas en el historial del MISMO activo
     SALTA 1 vela (representa la vela en movimiento)
     Predice la PRÓXIMA vela (después de la saltada)
+    PROFUNDIDAD: 15,000 velas (~10.4 días)
     """
     if len(candles_historicas) < 10:
         return []
@@ -334,15 +336,15 @@ def ema_rapida(prices, period):
     return val
 
 # ═══════════════════════════════════════════════════════════════
-#  MOTOR PRINCIPAL v13.2 — BÚSQUEDA CON SALTO (COMPLETO)
+#  MOTOR PRINCIPAL v13.3 — BÚSQUEDA CON SALTO (OPTIMIZADO)
 # ═══════════════════════════════════════════════════════════════
 
 def generar_senal(candles, estrategia="auto", timeframe_seg=60):
     """
-    MOTOR v13.2 — BÚSQUEDA CON SALTO DE VELA
+    MOTOR v13.3 — BÚSQUEDA CON SALTO DE VELA (15,000 velas)
     
     1. Toma 5 velas CERRADAS del activo
-    2. Busca el patrón en el HISTORIAL del MISMO activo
+    2. Busca el patrón en el HISTORIAL del MISMO activo (15,000 velas)
     3. SALTA la vela actual (en movimiento)
     4. Predice la PRÓXIMA vela (después de la actual)
     5. ¡SIEMPRE BUY o SELL!
@@ -549,7 +551,7 @@ def generar_senal(candles, estrategia="auto", timeframe_seg=60):
                 "timing": {},
             }
 
-    # ── 4. BUSCAR PATRÓN EN HISTORIAL CON SALTO ────────────────
+    # ── 4. BUSCAR PATRÓN EN HISTORIAL CON SALTO (15,000 velas) ──
     historial = velas_cerradas[:-5]
     resultados = buscar_patron_con_salto(historial, patron_actual, MAX_VELAS_HISTORIAL)
     analisis = analizar_resultados_salto(resultados)
@@ -727,12 +729,4 @@ def escanear_mejores_activos(candles_por_activo, timeframe_seg=60):
                     "activo": activo,
                     "direccion": senal["direccion"],
                     "certeza": senal["confianza"],
-                    "volatilidad": senal.get("volatilidad", "media"),
-                    "razones": senal.get("razones", [])[:3],
-                    "analisis": senal,
-                })
-        except Exception:
-            continue
-    
-    resultados.sort(key=lambda x: x["certeza"], reverse=True)
-    
+                    "volatilidad": senal.get
