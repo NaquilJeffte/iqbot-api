@@ -1,4 +1,4 @@
-"""
+cual es el titulo de este codigo: """
 Módulo para procesamiento de velas generadas en tiempo real desde IQ Option WebSocket.
 Versión optimizada para alta frecuencia (HFT) con mínima latencia.
 """
